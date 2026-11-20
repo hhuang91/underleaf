@@ -139,9 +139,11 @@ The builds are not signed with a paid developer certificate unless you add one
 (see below), so both systems ask for confirmation the first time:
 
 - **Windows** shows "Windows protected your PC". Click **More info → Run anyway**.
-- **macOS** says the app is from an unidentified developer. Open
-  **System Settings → Privacy & Security** and click **Open Anyway**, or run
-  `xattr -cr /Applications/Underleaf.app` once in Terminal.
+- **macOS** says the app is from an unidentified developer, or that it "is
+  damaged and can't be opened" (its way of saying the same about a download
+  that is not notarized). Run `xattr -cr /Applications/Underleaf.app` once in
+  Terminal; in the first case **System Settings → Privacy & Security →
+  Open Anyway** works as well.
 
 ## Building from source
 

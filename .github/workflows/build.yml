@@ -117,6 +117,35 @@ jobs:
           UNDERLEAF_E2E_REAL_ENGINE: '1'
           UNDERLEAF_E2E_RUN: built-in-engine
 
+      # The installer itself: install it the way a double-click does, minus
+      # the windows, and walk through the copy it installed.
+      - name: Install with the Windows installer
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        run: |
+          $setup = Get-ChildItem dist -Filter '*-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'No installer was built.' }
+          # /S installs without showing anything and without starting the app.
+          $process = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -PassThru
+          $null = $process.Handle # without this the exit code is lost
+          if (-not $process.WaitForExit(240000)) {
+            $process.Kill()
+            throw 'The installer did not finish within four minutes.'
+          }
+          if ($process.ExitCode -ne 0) { throw "The installer ended with exit code $($process.ExitCode)." }
+          $app = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter Underleaf.exe -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $app) { throw 'The installer did not install Underleaf.exe.' }
+          "Installed to $($app.FullName)"
+          "UNDERLEAF_INSTALLED_APP=$($app.FullName)" >> $env:GITHUB_ENV
+
+      - name: End-to-end test of the installed app
+        if: runner.os == 'Windows'
+        run: npm run test:e2e
+        env:
+          UNDERLEAF_E2E_APP: ${{ env.UNDERLEAF_INSTALLED_APP }}
+          UNDERLEAF_E2E_RUN: installed
+
       - name: Keep the screenshots of the end-to-end tests
         if: always()
         uses: actions/upload-artifact@v7

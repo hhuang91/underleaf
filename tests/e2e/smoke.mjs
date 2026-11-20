@@ -9,6 +9,8 @@
 // Set UNDERLEAF_E2E_REAL_ENGINE=1 to compile with the real engine instead.
 // UNDERLEAF_E2E_RUN=<name> keeps the screenshots in output/<name>, so that
 // several runs do not overwrite each other's.
+// UNDERLEAF_E2E_SLOWDOWN=<factor> slows the app's window down, to reproduce
+// failures that only show on a slow or busy machine.
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'

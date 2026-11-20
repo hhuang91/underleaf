@@ -100,12 +100,35 @@ async function until(check, what, timeout = 15_000) {
 
 const exists = (p) => fs.stat(p).then(() => true, () => false)
 
+/**
+ * Waits until the editor has nothing left to write. It saves a moment after
+ * the last key, and the indicator takes a moment to say so, so "Saved" only
+ * counts once it has stayed for longer than that.
+ */
+async function waitForSaved(win) {
+  const saved = () => document.querySelector('.save-indicator')?.textContent?.includes('Saved') === true
+  for (;;) {
+    await win.waitForFunction(saved)
+    await win.waitForTimeout(700)
+    if (await win.evaluate(saved)) return
+  }
+}
+
 try {
   const win = await app.firstWindow()
   win.on('console', (msg) => {
     if (msg.type() === 'error') problems.push(`console: ${msg.text()}`)
   })
   win.on('pageerror', (err) => problems.push(`pageerror: ${err.message}`))
+
+  // UNDERLEAF_E2E_SLOWDOWN=<factor> makes the app's window that many times
+  // slower than this script. That brings out steps which act before the app
+  // is ready for them, the way a slow or busy machine does.
+  const slowdown = Number(process.env.UNDERLEAF_E2E_SLOWDOWN ?? 0)
+  if (slowdown > 1) {
+    const cdp = await win.context().newCDPSession(win)
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: slowdown })
+  }
 
   // ---------------------------------------------------- empty dashboard
   await win.waitForSelector('.dash-welcome')
@@ -166,18 +189,18 @@ try {
   await win.click('.cm-content')
   await win.keyboard.press(`${mod}+End`)
   await win.keyboard.type('\n% typed by the smoke test')
-  await win.waitForFunction(() => document.querySelector('.save-indicator')?.textContent?.includes('Saved'))
-  await win.waitForTimeout(700)
-  assert.match(await fs.readFile(path.join(projectDir, 'main.tex'), 'utf8'), /% typed by the smoke test/)
+  const onDisk = async (file) => fs.readFile(path.join(projectDir, file), 'utf8').catch(() => '')
+  await until(async () => (await onDisk('main.tex')).includes('% typed by the smoke test'), 'the typed text to be saved')
 
   // -------------------------------- autocomplete and \begin ... \end help
   await win.keyboard.type('\n\\begin{itemize}')
   await win.keyboard.press('Escape')
   await win.keyboard.press('Enter')
   await win.keyboard.type('first item')
-  await win.waitForTimeout(700)
-  const typed = await fs.readFile(path.join(projectDir, 'main.tex'), 'utf8')
-  assert.match(typed, /\\begin\{itemize\}\n\s+\\item first item\n\\end\{itemize\}/, '\\end and \\item are inserted')
+  await until(
+    async () => /\\begin\{itemize\}\n\s+\\item first item\n\\end\{itemize\}/.test(await onDisk('main.tex')),
+    '\\end and \\item to be inserted, and the result to be saved'
+  )
 
   await win.keyboard.press(`${mod}+End`)
   await win.keyboard.type('\n\\sec')
@@ -187,8 +210,7 @@ try {
   for (let i = 0; i < 5; i++) await win.keyboard.press('Backspace')
   // Let the editor write its own changes first: unsaved local edits
   // deliberately take precedence over a change made on disk.
-  await win.waitForFunction(() => document.querySelector('.save-indicator')?.textContent?.includes('Saved'))
-  await win.waitForTimeout(700)
+  await waitForSaved(win)
 
   // ---------------------- an external edit shows up, then fails to compile
   const original = await fs.readFile(path.join(projectDir, 'main.tex'), 'utf8')
@@ -304,10 +326,19 @@ try {
   await win.click('.tree-toolbar button[title="New file"]')
   await win.fill('#prompt-input', 'notes.tex')
   await win.click('.modal-footer >> text=Create')
-  await win.waitForFunction(() => document.querySelector('.tree-item.selected')?.textContent?.includes('notes.tex'))
+  // The new file opens with the cursor in it: typing needs no click. (Wait for
+  // that, not just for the file to be listed, or the first key is typed while
+  // the dialog still has the focus.)
+  await win.waitForFunction(
+    () =>
+      document.querySelector('.tree-item.selected')?.textContent?.includes('notes.tex') &&
+      !document.querySelector('.modal') &&
+      document.querySelector('.cm-content')?.contains(document.activeElement)
+  )
   await win.keyboard.type('Some notes')
-  await win.waitForTimeout(800)
-  assert.equal(await fs.readFile(path.join(projectDir, 'notes.tex'), 'utf8'), 'Some notes')
+  await until(async () => (await onDisk('notes.tex')) !== '', 'the new file to be saved')
+  await waitForSaved(win)
+  assert.equal(await onDisk('notes.tex'), 'Some notes')
 
   // Formatting tools that do not fit next to the others sit in a "More" menu.
   const visibleTools = await win.locator('.toolbar-item').evaluateAll(
@@ -321,9 +352,8 @@ try {
   await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('\\begin{enumerate}'))
   await win.keyboard.press(`${mod}+z`)
   await win.waitForFunction(() => !document.querySelector('.cm-content')?.textContent?.includes('\\begin{enumerate}'))
-  await win.waitForFunction(() => document.querySelector('.save-indicator')?.textContent?.includes('Saved'))
-  await win.waitForTimeout(700)
-  assert.equal(await fs.readFile(path.join(projectDir, 'notes.tex'), 'utf8'), 'Some notes')
+  await waitForSaved(win)
+  assert.equal(await onDisk('notes.tex'), 'Some notes')
 
   // Rename through the context menu, then find-and-replace in the editor.
   await win.click('.tree-item >> text=notes.tex', { button: 'right' })
@@ -450,8 +480,7 @@ try {
   await win.selectOption('.menu-row:has-text("Keybindings") select', 'default')
   await win.click('.drawer-header .icon-btn')
   await win.waitForFunction(() => !document.querySelector('.cm-fat-cursor'))
-  await win.waitForFunction(() => document.querySelector('.save-indicator')?.textContent?.includes('Saved'))
-  await win.waitForTimeout(700)
+  await waitForSaved(win)
 
   // ------------------------------------------------ per-project settings
   // The compiler and the main document are stored next to the project's files.

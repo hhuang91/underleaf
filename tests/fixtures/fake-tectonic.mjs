@@ -29,27 +29,34 @@ const keepGoing = args.some((a, i) => a === 'continue-on-errors' && args[i - 1] 
 const job = input.replace(/\.[^.]+$/, '')
 const cwd = process.cwd()
 
-/** Reads a file and follows \input{...} one level deep, tracking where each line came from. */
-function load(file) {
-  const out = []
+/**
+ * Reads a file and follows \input{...}. Returns what TeX goes through, in
+ * order: { open } when a file is opened, one entry per line, { close } at its
+ * end. `as` is the file's name the way the document wrote it: like Tectonic,
+ * this engine reports \input{chapter} as "chapter", without ".tex".
+ */
+function load(file, as = file) {
+  const out = [{ open: as }]
   const text = fs.readFileSync(path.join(cwd, file), 'utf8')
   text.split(/\r?\n/).forEach((line, i) => {
     const m = /\\input\{([^}]+)\}/.exec(line)
     if (m) {
       const child = /\.[a-z]+$/i.test(m[1]) ? m[1] : `${m[1]}.tex`
       if (fs.existsSync(path.join(cwd, child))) {
-        out.push(...load(child))
+        out.push(...load(child, m[1]))
         return
       }
-      out.push({ file, line: i + 1, text: line, missing: child })
+      out.push({ file, as, line: i + 1, text: line, missing: child })
       return
     }
-    out.push({ file, line: i + 1, text: line })
+    out.push({ file, as, line: i + 1, text: line })
   })
+  out.push({ close: true })
   return out
 }
 
-const source = load(input)
+const events = load(input)
+const source = events.filter((e) => e.text !== undefined)
 const full = source.map((s) => s.text).join('\n')
 
 // "% fake:partial-pdf" leaves a PDF that is cut short, as an engine does when
@@ -61,27 +68,37 @@ if (sleep) await new Promise((resolve) => setTimeout(resolve, Number(sleep[1])))
 
 console.error('note: Running TeX ...')
 
-let log = `This is a fake TeX engine (Underleaf test fixture)\n**${input}\n(${input}\n`
+// The log follows Tectonic's: "(name" when a file is opened and ")" when it
+// ends, errors as "! message" followed by the source line as "l.<n> ...".
+let log = `This is a fake TeX engine (Underleaf test fixture)\n**${input}\n`
 const errors = []
 const consoleErrors = []
 
-if (/\\usepackage\{notcached\}/.test(full) && onlyCached) {
-  const at = source.find((s) => /\\usepackage\{notcached\}/.test(s.text))
-  log += `! LaTeX Error: File \`notcached.sty' not found.\n\nl.${at.line} ${at.text}\n\n`
-  consoleErrors.push(`error: ${at.file}:${at.line}: LaTeX Error: File \`notcached.sty' not found.`)
-  errors.push(at)
-}
-
-for (const s of source) {
+for (const s of events) {
+  if (s.open) {
+    log += `(${s.open}\n`
+    continue
+  }
+  if (s.close) {
+    log += ')\n'
+    continue
+  }
+  if (/\\usepackage\{notcached\}/.test(s.text) && onlyCached) {
+    log += `! LaTeX Error: File \`notcached.sty' not found.\n\nl.${s.line} ${s.text}\n\n`
+    consoleErrors.push(`error: ${s.as}:${s.line}: LaTeX Error: File \`notcached.sty' not found.`)
+    errors.push(s)
+  }
   if (s.missing) {
     log += `! LaTeX Error: File \`${s.missing}' not found.\n\nl.${s.line} ${s.text}\n\n`
-    consoleErrors.push(`error: ${s.file}:${s.line}: LaTeX Error: File \`${s.missing}' not found.`)
+    consoleErrors.push(`error: ${s.as}:${s.line}: LaTeX Error: File \`${s.missing}' not found.`)
     errors.push(s)
   }
   const bad = s.text.indexOf('\\badcommand')
   if (bad >= 0 && !s.text.trimStart().startsWith('%')) {
-    log += `${s.file}:${s.line}: Undefined control sequence.\nl.${s.line} ${s.text.slice(0, bad + '\\badcommand'.length)}\n${' '.repeat(bad + 20)}${s.text.slice(bad + '\\badcommand'.length)}\n`
-    consoleErrors.push(`error: ${s.file}:${s.line}: Undefined control sequence`)
+    // TeX shows the source line broken right after the offending command.
+    const head = `l.${s.line} ${s.text.slice(0, bad + '\\badcommand'.length)}`
+    log += `! Undefined control sequence.\n${head}\n${' '.repeat(head.length)}${s.text.slice(bad + '\\badcommand'.length)}\n\n`
+    consoleErrors.push(`error: ${s.as}:${s.line}: Undefined control sequence`)
     errors.push(s)
   }
   const ref = /\\ref\{missing[^}]*\}/.exec(s.text)
@@ -145,7 +162,7 @@ for (let p = 0; p * LINES_PER_PAGE < Math.max(body.length, 1); p++) {
 }
 synctex += 'Postamble:\nCount:0\nPost scriptum:\n'
 
-log += `)\nOutput written on ${job}.pdf (${pages.length} page${pages.length === 1 ? '' : 's'}).\n`
+log += `Output written on ${job}.pdf (${pages.length} page${pages.length === 1 ? '' : 's'}).\n`
 
 fs.writeFileSync(path.join(cwd, `${job}.pdf`), makePdf(pages))
 fs.writeFileSync(path.join(cwd, `${job}.log`), log)

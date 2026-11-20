@@ -129,6 +129,35 @@ describe.skipIf(!enabled)('real Tectonic engine', () => {
     await fs.writeFile(file, source)
   }, 300_000)
 
+  it('reports an error in an included file under that file, also without ".tex" in \\input', async () => {
+    const file = path.join(project, 'main.tex')
+    const source = await fs.readFile(file, 'utf8')
+    const chapter = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of the chapter.`)
+    chapter[29] = 'Line 30 calls \\notarealcommand here.'
+    await fs.writeFile(path.join(project, 'chapter.tex'), `${chapter.join('\n')}\n`)
+    await fs.writeFile(file, source.replace('\\section{Figures}', '\\input{chapter}\n\n\\section{Figures}'))
+    try {
+      const result = await manager.compile(request())
+      if (verbose) console.log(JSON.stringify({ ...result, rawLog: result.rawLog.slice(-2500) }, null, 2))
+      // One error, in the right file; the engine's console repeats it under
+      // the name "chapter", which must not show up as further errors.
+      const errors = result.entries.filter((e) => e.level === 'error')
+      expect(errors.map((e) => [e.file, e.line, e.message])).toEqual([
+        ['chapter.tex', 30, 'Undefined control sequence: \\notarealcommand']
+      ])
+
+      // SyncTeX knows the included file as well.
+      const rects = await manager.syncToPdf(project, 'chapter.tex', 5)
+      expect(rects.length).toBeGreaterThan(0)
+      const r = rects[0]
+      const back = await manager.syncToSource(project, r.page, r.x + r.width / 2, r.y + r.height / 2)
+      expect(back?.file).toBe('chapter.tex')
+    } finally {
+      await fs.writeFile(file, source)
+      await fs.rm(path.join(project, 'chapter.tex'), { force: true })
+    }
+  }, 300_000)
+
   it('reports a missing file without retrying forever', async () => {
     const file = path.join(project, 'main.tex')
     const source = await fs.readFile(file, 'utf8')

@@ -8,14 +8,18 @@ import {
   type ParseContext
 } from '../../src/main/compile/logParser'
 
-// Resolves the way the compile manager does: only files of the project map to a path.
-const PROJECT = new Set(['main.tex', 'sections/intro.tex', 'refs.bib'])
-const ctx: ParseContext = {
-  resolveFile(p) {
-    const rel = p.replace(/\\/g, '/').replace(/^\.\//, '')
-    return PROJECT.has(rel) ? rel : null
+// Resolves the way the compile manager does: only files of the project map to
+// a path, and a name may come without its ".tex".
+function projectOf(...files: string[]): ParseContext {
+  const project = new Set(files)
+  return {
+    resolveFile(p) {
+      const rel = p.replace(/\\/g, '/').replace(/^\.\//, '')
+      return project.has(rel) ? rel : project.has(`${rel}.tex`) ? `${rel}.tex` : null
+    }
   }
 }
+const ctx = projectOf('main.tex', 'sections/intro.tex', 'refs.bib')
 
 const PDFLATEX_LOG = String.raw`This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2025) (preloaded format=pdflatex)
  restricted \write18 enabled.
@@ -315,6 +319,73 @@ Output written on main.xdv (2 pages, 28960 bytes).
       }
     ])
   })
+
+  it('follows a file that the document included without its extension', () => {
+    // What Tectonic 0.17 writes for \input{chapter}, \include{part} and
+    // \input{sub/deep.tex}: the name as the document spelled it.
+    const log = [
+      '(main.tex',
+      'LaTeX Font Info:    ... okay on input line 2.',
+      ' (chapter',
+      '! Undefined control sequence.',
+      'l.20 Line 20 has a \\badcommand',
+      '                               in it.',
+      'The control sequence at the end of the top line',
+      "of your error message was never \\def'ed. If you have",
+      "misspelled it (e.g., `\\hobx'), type `I' and the correct",
+      "spelling (e.g., `I\\hbox'). Otherwise just continue,",
+      "and I'll forget about whatever was undefined.",
+      '',
+      ') [1',
+      '',
+      ']',
+      "\\openout2 = `part.aux'.",
+      '',
+      ' (part.tex',
+      '! Undefined control sequence.',
+      'l.8 Line 8 has \\anotherbad',
+      '                           here.',
+      '',
+      ') [2',
+      '',
+      '] (sub/deep.tex',
+      '! Undefined control sequence.',
+      'l.4 Line 4 has \\deepbad',
+      '                        here.',
+      '',
+      ')',
+      '! Undefined control sequence.',
+      'l.7 After \\mainbad',
+      '                   here.',
+      '',
+      '[3',
+      '',
+      '',
+      '] (main.aux (part.aux)) )',
+      'Output written on main.xdv (3 pages, 11376 bytes).'
+    ].join('\n')
+    const entries = parseLatexLog(log, projectOf('main.tex', 'chapter.tex', 'part.tex', 'sub/deep.tex'))
+    expect(entries.map((e) => [e.file, e.line, e.message])).toEqual([
+      ['chapter.tex', 20, 'Undefined control sequence: \\badcommand'],
+      ['part.tex', 8, 'Undefined control sequence: \\anotherbad'],
+      ['sub/deep.tex', 4, 'Undefined control sequence: \\deepbad'],
+      ['main.tex', 7, 'Undefined control sequence: \\mainbad']
+    ])
+  })
+
+  it('does not take a word in parentheses for a file unless the project has it', () => {
+    const log = [
+      '(main.tex',
+      '(see the transcript file for additional information)',
+      '(chapter one is missing)',
+      '! Undefined control sequence.',
+      'l.3 Some \\oops',
+      '             here.',
+      ')'
+    ].join('\n')
+    const [error] = parseLatexLog(log, projectOf('main.tex'))
+    expect(error).toMatchObject({ file: 'main.tex', line: 3 })
+  })
 })
 
 describe('unwrapLog', () => {
@@ -380,5 +451,29 @@ describe('parseEngineOutput', () => {
   it('can keep only engine-level problems', () => {
     const entries = parseEngineOutput(output, ctx, true)
     expect(entries.map((e) => e.message)).toEqual(['failed to open the default bundle'])
+  })
+
+  it('recognises a file that is named without its extension', () => {
+    // Tectonic prints \input{chapter} as "chapter", and every error twice
+    // when it runs TeX twice.
+    const console = [
+      'error: chapter:20: Undefined control sequence',
+      'error: main.tex:7: Undefined control sequence',
+      'error: chapter:20: Undefined control sequence',
+      'error: main.tex:7: Undefined control sequence',
+      'error: stage:2: this is not about a file of the project'
+    ].join('\n')
+    const project = projectOf('main.tex', 'chapter.tex')
+    expect(parseEngineOutput(console, project).map((e) => [e.file, e.line, e.message])).toEqual([
+      ['chapter.tex', 20, 'Undefined control sequence'],
+      ['main.tex', 7, 'Undefined control sequence'],
+      ['chapter.tex', 20, 'Undefined control sequence'],
+      ['main.tex', 7, 'Undefined control sequence'],
+      [undefined, undefined, 'stage:2: this is not about a file of the project']
+    ])
+    // With a TeX log at hand, what points at a source line is left to the log.
+    expect(parseEngineOutput(console, project, true).map((e) => e.message)).toEqual([
+      'stage:2: this is not about a file of the project'
+    ])
   })
 })

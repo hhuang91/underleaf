@@ -76,6 +76,19 @@ async function waitForPdf(win) {
   })
 }
 
+/**
+ * Waits until the editor shows the main document. The editor only renders the
+ * lines around the part that is scrolled into view, so this must not look for
+ * one particular line such as the first.
+ */
+async function waitForMainTex(win) {
+  await win.waitForFunction(() => {
+    const selected = document.querySelector('.tree-item.selected')?.textContent ?? ''
+    const text = document.querySelector('.cm-content')?.textContent ?? ''
+    return selected.includes('main.tex') && /\\(documentclass|begin|end|section|item)\b/.test(text)
+  })
+}
+
 /** Polls a condition that lives outside the page (usually a file on disk). */
 async function until(check, what, timeout = 15_000) {
   const deadline = Date.now() + timeout
@@ -234,6 +247,42 @@ try {
   if ((await win.locator('.logs-pane').count()) > 0) await win.click('.pdf-tool[title="Logs and output files"]')
   await waitForPdf(win)
 
+  // ------------- an error in another file: its log entry leads to the line
+  const chapter = Array.from({ length: 200 }, (_, i) => `Line ${i + 1} of the chapter.`)
+  chapter[149] = 'Line 150 has a \\badcommand in it.'
+  await fs.writeFile(path.join(projectDir, 'chapter.tex'), `${chapter.join('\n')}\n`)
+  await fs.writeFile(path.join(projectDir, 'main.tex'), original.replace('\\maketitle', '\\maketitle\n\\input{chapter}'))
+  await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('\\input{chapter}'), null, {
+    timeout: 10_000
+  })
+  await win.click('.split-main')
+  await win.waitForSelector('.pdf-tool .badge.error', { timeout: compileTimeout })
+  if ((await win.locator('.logs-pane').count()) === 0) await win.click('.pdf-tool:has(.badge)')
+  await win.click('.log-entry.error .log-entry-link')
+  // The file opens with that line in view, not at its top.
+  await win.waitForFunction(() => {
+    const scroller = document.querySelector('.cm-scroller')?.getBoundingClientRect()
+    const line = document.querySelector('.cm-activeLine')
+    const box = line?.getBoundingClientRect()
+    if (!scroller || !line || !box || !line.textContent?.includes('Line 150')) return false
+    return box.top >= scroller.top && box.bottom <= scroller.bottom
+  })
+  assert.match(await win.locator('.tree-item.selected').innerText(), /chapter\.tex/)
+  await win.click('.tree-item >> text=main.tex')
+  await waitForMainTex(win)
+  await fs.writeFile(path.join(projectDir, 'main.tex'), original)
+  await fs.rm(path.join(projectDir, 'chapter.tex'))
+  await win.waitForFunction(
+    () => ![...document.querySelectorAll('.tree-item')].some((e) => e.textContent?.includes('chapter.tex')),
+    null,
+    { timeout: 10_000 }
+  )
+  await win.waitForFunction(() => !document.querySelector('.cm-content')?.textContent?.includes('\\input{chapter}'))
+  await win.click('.split-main')
+  await win.waitForFunction(() => !document.querySelector('.pdf-tool .badge.error'), null, { timeout: compileTimeout })
+  if ((await win.locator('.logs-pane').count()) > 0) await win.click('.pdf-tool[title="Logs and output files"]')
+  await waitForPdf(win)
+
   // ------------------------------------------------------------- SyncTeX
   // source -> PDF: put the cursor in a paragraph and press the arrow button.
   await win.click('.cm-line:has-text("Everything in this project")')
@@ -364,7 +413,7 @@ try {
   await win.click('.tree-item >> text=references.bib')
   await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('@book'))
   await win.click('.tree-item >> text=main.tex')
-  await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('\\documentclass'))
+  await waitForMainTex(win)
 
   // ------------------------------------------------------------ the menu
   await win.click('.toolbar-btn >> text=Menu')
@@ -439,6 +488,14 @@ try {
   await until(() => exists(path.join(projectDir, 'todo.tex')), 'todo.tex to be moved back to the top level')
   assert.equal(await exists(path.join(projectDir, 'figures', 'todo.tex')), false)
 
+  // The editor is hidden while a picture is shown. Leave the main document
+  // scrolled down, look at a picture, delete it, and come back.
+  await win.evaluate(() => {
+    document.querySelector('.cm-scroller').scrollTop = 420
+  })
+  await win.waitForTimeout(300)
+  const leftAt = await win.evaluate(() => Math.round(document.querySelector('.cm-scroller').scrollTop))
+  assert.equal(leftAt > 100, true, 'the main document is long enough to scroll')
   await win.click('.tree-item >> text=extra-figure.png')
   await win.waitForSelector('.preview img')
   await win.click('.tree-toolbar button[title="Delete"]')
@@ -449,7 +506,13 @@ try {
   )
   await win.waitForSelector('text=No file selected')
   await win.click('.tree-item >> text=main.tex')
-  await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('\\documentclass'))
+  await waitForMainTex(win)
+  // The document is where it was left: same scroll position, same cursor.
+  await win.waitForFunction(
+    (top) => Math.abs((document.querySelector('.cm-scroller')?.scrollTop ?? -1) - top) <= 2,
+    leftAt
+  )
+  assert.match(await win.locator('.cm-activeLine').innerText(), /\\maketitle/)
 
   // ---------------------------------------------------------- auto compile
   await win.click('.split-caret')
@@ -549,7 +612,7 @@ try {
   await win.fill('.project-name-input', 'Renamed Paper')
   await win.keyboard.press('Enter')
   await win.waitForFunction(() => document.querySelector('.project-name')?.textContent?.includes('Renamed Paper'))
-  await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('\\documentclass'))
+  await waitForMainTex(win)
   assert.equal((await fs.readdir(library)).sort().join(','), 'Demo Paper,Renamed Paper')
   // The editor followed the folder: what is typed now is saved under the new
   // name, and the old folder does not come back.

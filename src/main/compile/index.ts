@@ -195,6 +195,9 @@ export class CompileManager {
    * is not how this app spells it when a symbolic link is involved: on macOS,
    * for example, /tmp and /var are links into /private. Both spellings of the
    * mirror root are therefore accepted.
+   *
+   * A name may come without its ".tex": Tectonic's log and console name a file
+   * the way the document did, so \input{chapter} is reported as "chapter".
    */
   private async resolver(
     workRoot: string,
@@ -206,13 +209,14 @@ export class CompileManager {
     if (physical !== workRoot) roots.push(physical)
     const known = new Map<string, string>()
     for (const rel of sourceFiles) known.set(CASE_INSENSITIVE ? rel.toLowerCase() : rel, rel)
+    const lookup = (rel: string): string | undefined => known.get(CASE_INSENSITIVE ? rel.toLowerCase() : rel)
     return (logPath: string) => {
       if (!logPath) return null
       const abs = path.resolve(mainDirAbs, logPath.replace(/^"+|"+$/g, ''))
       for (const root of roots) {
         const rel = toPosix(path.relative(root, abs))
         if (!rel || rel === '..' || rel.startsWith('../') || path.isAbsolute(rel)) continue
-        const hit = known.get(CASE_INSENSITIVE ? rel.toLowerCase() : rel)
+        const hit = lookup(rel) ?? lookup(`${rel}.tex`)
         if (hit !== undefined) return hit
       }
       return null

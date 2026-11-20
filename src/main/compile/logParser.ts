@@ -7,6 +7,8 @@ export interface ParseContext {
   /**
    * Maps a path as it appears in the log to a project-relative path, or null
    * when the file is not part of the project (class files, packages, ...).
+   * The path may lack its ".tex": Tectonic names a file the way the document
+   * did, so \input{chapter} shows up as "chapter".
    */
   resolveFile(logPath: string): string | null
 }
@@ -50,8 +52,10 @@ const SOURCE_LINE = /^l\.(\d+)(?: (.*))?$/
 const BOILERPLATE = /^(See the LaTeX manual|Type\s+H <return>|\s*\.\.\.\s*$|Type X to quit|or enter new name|Enter file name)/
 // A path that is explicit about being a path: ./x, ../x, /x or C:\x
 const EXPLICIT_PATH = /^((?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/])[^()\n]*?\.[A-Za-z0-9_-]+)(?=[\s()]|$)/
-// A bare token such as "main.tex" (Tectonic and MiKTeX print these).
-const BARE_PATH = /^([^\s()]+\.[A-Za-z0-9_-]+)(?=[\s()]|$)/
+// A bare token such as "main.tex" (Tectonic and MiKTeX print these) or, for
+// \input{chapter} under Tectonic, just "chapter". It only counts as a file
+// when it resolves to one of the project's.
+const BARE_NAME = /^([^\s()]+)(?=[\s()]|$)/
 
 function startsMessage(line: string): boolean {
   return (
@@ -101,7 +105,7 @@ export function parseLatexLog(text: string, ctx: ParseContext): LogEntry[] {
           pos += 1 + explicit[0].length
           continue
         }
-        const bare = BARE_PATH.exec(rest)
+        const bare = BARE_NAME.exec(rest)
         if (bare && ctx.resolveFile(bare[1]) !== null) {
           stack.push(bare[1])
           pos += 1 + bare[0].length
@@ -407,6 +411,16 @@ const ENGINE_NOISE =
   /^halted (on|after) |^something bad happened inside|engine had an unrecoverable error|errors were issued by the TeX engine/
 
 /**
+ * "chapter:12: message", where the file is named without its extension, the
+ * way \input{chapter} wrote it. Only accepted for a file of the project, so
+ * that other messages with a number after a colon are left alone.
+ */
+function bareLocation(text: string, ctx: ParseContext): RegExpExecArray | null {
+  const m = /^([^:\s]+):(\d+): (.+)$/.exec(text)
+  return m && ctx.resolveFile(m[1]) !== null ? m : null
+}
+
+/**
  * Reads "error: ..." / "warning: ..." lines from an engine's console output
  * (Tectonic prints these). With `engineOnly`, messages that point at a source
  * line are skipped because the TeX log already reports them in more detail.
@@ -418,7 +432,7 @@ export function parseEngineOutput(output: string, ctx: ParseContext, engineOnly 
     const m = /^(error|warning): (.+)$/.exec(line)
     if (!m) continue
     if (ENGINE_NOISE.test(m[2])) continue
-    const where = /^((?:[A-Za-z]:)?[^:]+\.[A-Za-z0-9_-]+):(\d+): (.+)$/.exec(m[2])
+    const where = /^((?:[A-Za-z]:)?[^:]+\.[A-Za-z0-9_-]+):(\d+): (.+)$/.exec(m[2]) ?? bareLocation(m[2], ctx)
     if (where && engineOnly) continue
     const file = where ? ctx.resolveFile(where[1]) ?? undefined : undefined
     const message = where ? where[3] : m[2]

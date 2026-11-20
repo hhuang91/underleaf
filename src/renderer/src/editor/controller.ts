@@ -105,6 +105,13 @@ class EditorController {
   /** A state prepared while no view was mounted. */
   private pending: EditorState | null = null
   private readonly stash = new Map<string, { json: unknown; scrollTop: number }>()
+  /**
+   * Where the document shown last still has to be scrolled to: back to where
+   * it was left (`top`), or to a place that was asked for (`pos`). It is carried
+   * out once the editor is laid out, because a hidden editor (display: none
+   * while a preview is shown) cannot scroll.
+   */
+  private pendingScroll: { top: number } | { pos: number } | null = null
   private projectId: string | null = null
   private saveTimer: number | null = null
   private outlineTimer: number | null = null
@@ -237,13 +244,19 @@ class EditorController {
       state: this.pending ?? EditorState.create({ doc: '', extensions: [themeC.of(this.themeExtension())] })
     })
     this.pending = null
-    if (this.meta) this.afterShow()
+    if (this.meta) {
+      this.applyPendingScroll()
+      this.afterShow()
+    }
   }
 
   unmount(): void {
     if (!this.view) return
     // Keep the live state so a remount (or React's development double-mount) is seamless.
-    if (this.meta) this.pending = this.view.state
+    if (this.meta) {
+      this.pending = this.view.state
+      this.pendingScroll ??= { top: this.view.scrollDOM.scrollTop }
+    }
     this.view.destroy()
     this.view = null
   }
@@ -254,6 +267,7 @@ class EditorController {
     this.projectId = projectId
     this.meta = null
     this.pending = null
+    this.pendingScroll = null
     this.stash.clear()
     this.entries = []
     this.lastCursorLine = 0
@@ -286,9 +300,25 @@ class EditorController {
     if (!this.meta) return
     const state = this.view?.state ?? this.pending
     if (!state) return
+    // A document that was not scrolled back to its place yet is still "there".
+    const owed = this.pendingScroll && 'top' in this.pendingScroll ? this.pendingScroll.top : null
     this.stash.set(this.meta.path, {
       json: state.toJSON({ history: historyField }),
-      scrollTop: this.view?.scrollDOM.scrollTop ?? 0
+      scrollTop: owed ?? this.view?.scrollDOM.scrollTop ?? 0
+    })
+  }
+
+  /** Carries out `pendingScroll` as soon as the editor is visible. */
+  private applyPendingScroll(): void {
+    const view = this.view
+    if (!view || !this.pendingScroll) return
+    requestAnimationFrame(() => {
+      const wanted = this.pendingScroll
+      if (this.view !== view || !wanted) return
+      if (view.scrollDOM.clientHeight === 0) return // still hidden: refreshLayout() comes back to it
+      this.pendingScroll = null
+      if ('top' in wanted) view.scrollDOM.scrollTop = wanted.top
+      else view.dispatch({ effects: EditorView.scrollIntoView(Math.min(wanted.pos, view.state.doc.length), { y: 'center' }) })
     })
   }
 
@@ -309,13 +339,10 @@ class EditorController {
     this.meta = { path, eol, dirty: false, readOnly }
     this.lastCursorLine = 0
     this.revisionCounter++
+    this.pendingScroll = { top: saved?.scrollTop ?? 0 }
     if (this.view) {
       this.view.setState(state)
-      const top = saved?.scrollTop ?? 0
-      const view = this.view
-      requestAnimationFrame(() => {
-        if (this.view === view && this.meta?.path === path) view.scrollDOM.scrollTop = top
-      })
+      this.applyPendingScroll()
       this.afterShow()
     } else {
       this.pending = state
@@ -328,6 +355,7 @@ class EditorController {
     this.cancelTimers()
     this.meta = null
     this.pending = null
+    this.pendingScroll = null
     this.events.onOutline([])
   }
 
@@ -343,6 +371,7 @@ class EditorController {
   /** The view was hidden with display:none; CodeMirror needs to re-measure. */
   refreshLayout(): void {
     this.view?.requestMeasure()
+    this.applyPendingScroll()
   }
 
   focus(): void {
@@ -383,9 +412,13 @@ class EditorController {
     const doc = view.state.doc
     const target = doc.line(Math.min(Math.max(1, Math.round(line)), doc.lines))
     const pos = Math.min(target.from + Math.max(0, column), target.to)
+    // A destination that was asked for replaces going back to where the file
+    // was left. A hidden editor cannot scroll yet, so it is kept for later.
+    const hidden = view.scrollDOM.clientHeight === 0
+    this.pendingScroll = hidden ? { pos } : null
     view.dispatch({
       selection: { anchor: pos },
-      effects: EditorView.scrollIntoView(pos, { y: 'center' })
+      effects: hidden ? [] : EditorView.scrollIntoView(pos, { y: 'center' })
     })
     view.focus()
     if (flash) flashLineAt(view, pos)

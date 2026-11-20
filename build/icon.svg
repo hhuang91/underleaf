@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34405a"/>
+      <stop offset="1" stop-color="#1b222c"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#098842"/>
+      <stop offset="1" stop-color="#5fd07e"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded tile with the margins macOS expects around app icons. -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <!-- The 32-unit logo mark, scaled up and centred. -->
+  <g transform="translate(196 184) scale(19.75)">
+    <path d="M7.2 21.6C5.9 13.2 11.6 5.4 25.6 4.4c1 12.3-5 18.4-13.3 18.4-1 0-1.9-.1-2.8-.3 2.2-4.7 5.5-8.4 10.3-11.5-5.6 2.3-9.8 5.8-12.6 10.6z" fill="url(#leaf)"/>
+    <rect x="5" y="25.4" width="22" height="2.8" rx="1.4" fill="#ffffff"/>
+  </g>
+</svg>

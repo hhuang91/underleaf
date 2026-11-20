@@ -1,0 +1,96 @@
+# Packaging configuration (https://www.electron.build/configuration).
+#
+#   npm run dist:win   -> dist/Underleaf-<version>-windows-x64-setup.exe      (installer)
+#                         dist/Underleaf-<version>-windows-x64-portable.exe   (no installation)
+#   npm run dist:mac   -> dist/Underleaf-<version>-mac-<arch>.dmg / .zip      (run on macOS)
+
+appId: app.underleaf.desktop
+productName: Underleaf
+copyright: Copyright © 2026 Heyuan Huang
+
+directories:
+  output: dist
+  buildResources: build
+
+# Everything the app needs at runtime is bundled into out/ by electron-vite,
+# so no node_modules are shipped.
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+
+asar: true
+
+# The interface is English only; shipping one Chromium locale instead of all
+# of them saves about 45 MB.
+electronLanguages:
+  - en-US
+
+extraResources:
+  - from: resources/latexmkrc
+    to: latexmkrc
+  - from: resources/icon.png
+    to: icon.png
+  # The app's own licence travels with every copy of it, and so do the
+  # licences of the software it contains (the last file is written by
+  # scripts/collect-licenses.mjs during `npm run build`).
+  - from: LICENSE
+    to: LICENSE.txt
+  - from: NOTICE
+    to: NOTICE.txt
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: resources/THIRD_PARTY_LICENSES.txt
+    to: THIRD_PARTY_LICENSES.txt
+  # The Tectonic engine for the platform being packaged
+  # (downloaded by scripts/fetch-tectonic.mjs).
+  - from: resources/bin/${os}-${arch}
+    to: bin
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  # One click: double-click the installer and the app starts, no wizard and no
+  # administrator rights (it installs for the current user).
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  artifactName: ${productName}-${version}-windows-${arch}-setup.${ext}
+
+portable:
+  artifactName: ${productName}-${version}-windows-${arch}-portable.${ext}
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Explanations shown in macOS's folder-access prompts. The project library
+  # is ~/Documents/Underleaf by default; the others apply only when projects
+  # or exports are placed there.
+  extendInfo:
+    NSDocumentsFolderUsageDescription: Underleaf keeps your LaTeX projects in the Documents folder.
+    NSDesktopFolderUsageDescription: Underleaf needs access to work with projects stored on the Desktop.
+    NSDownloadsFolderUsageDescription: Underleaf needs access to import and export projects in the Downloads folder.
+
+dmg:
+  sign: false
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Office
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}

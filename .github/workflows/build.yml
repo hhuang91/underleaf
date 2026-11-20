@@ -1,0 +1,146 @@
+# Builds and tests the double-clickable apps for Windows and macOS.
+#
+# - Every push to main and every pull request: build, test, and attach the
+#   apps to the workflow run (Actions tab > run > Artifacts).
+# - Pushing a tag such as v0.1.0 additionally publishes them as a GitHub Release.
+#
+# macOS code signing is optional. Without the secrets below the app is ad-hoc
+# signed, which runs fine but shows Gatekeeper's "unidentified developer"
+# prompt on first launch (see README). To ship signed and notarized builds add:
+#   CSC_LINK, CSC_KEY_PASSWORD                      Developer ID certificate (.p12, base64)
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID   for notarization
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            script: dist:win
+            app: dist/win-unpacked/Underleaf.exe
+          - name: macOS
+            os: macos-latest
+            script: dist:mac
+            app: dist/mac-arm64/Underleaf.app/Contents/MacOS/Underleaf
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Separate steps: in a multi-line script PowerShell carries on after a
+      # command that failed, and only the last one decides the outcome.
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: npm run ${{ matrix.script }}
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CSC_LINK" ]; then
+            npm run ${{ matrix.script }}
+          else
+            # No Developer ID certificate: sign ad hoc so the app still starts
+            # on Apple silicon, where unsigned code is not allowed to run.
+            unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            # electron-builder skips signing in pull-request builds unless told
+            # otherwise. Ad-hoc signing involves no secrets, so it is safe there.
+            export CSC_FOR_PULL_REQUEST=true
+            npm run ${{ matrix.script }} -- -c.mac.identity=- -c.mac.notarize=false
+          fi
+
+      # Uploaded before the end-to-end tests, so that a build is there to look
+      # at when one of them fails.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Underleaf-${{ matrix.name }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+      # The tests below drive the packaged app the way a user would. The hosted
+      # Windows machines start with a 1024x768 screen, smaller than the window.
+      - name: Use a larger screen
+        if: runner.os == 'Windows'
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      - name: End-to-end test of the packaged app
+        run: npm run test:e2e
+        env:
+          UNDERLEAF_E2E_APP: ${{ matrix.app }}
+          UNDERLEAF_E2E_RUN: test-engine
+
+      # The same walk-through with the engine that ships inside the app, which
+      # downloads TeX packages on its first run. Not for pull requests, so that
+      # they do not depend on the package server being reachable.
+      - name: End-to-end test with the built-in TeX engine
+        if: github.event_name != 'pull_request'
+        run: npm run test:e2e
+        env:
+          UNDERLEAF_E2E_APP: ${{ matrix.app }}
+          UNDERLEAF_E2E_REAL_ENGINE: '1'
+          UNDERLEAF_E2E_RUN: built-in-engine
+
+      - name: Keep the screenshots of the end-to-end tests
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-screenshots-${{ matrix.name }}
+          path: tests/e2e/output
+          if-no-files-found: ignore
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: Underleaf-*
+          path: release
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -1,0 +1,11 @@
+Underleaf
+Copyright 2026 Heyuan Huang
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+Packaged builds of Underleaf include software from other projects, each under
+its own licence. They are listed in THIRD_PARTY_NOTICES.md, and their licence
+texts are installed with the app as THIRD_PARTY_LICENSES.txt.
+
+Underleaf is an independent project. It is not affiliated with, endorsed by or
+connected to Overleaf or the company behind it.

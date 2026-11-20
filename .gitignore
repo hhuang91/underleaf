@@ -1,0 +1,18 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+
+# Engine binaries are downloaded by `npm run fetch:tectonic`
+resources/bin/
+
+# Copied from pdfjs-dist by scripts/copy-pdfjs-assets.mjs
+src/renderer/public/pdfjs/
+
+# Gathered from node_modules by scripts/collect-licenses.mjs
+resources/THIRD_PARTY_LICENSES.txt
+
+# Test output
+tests/e2e/output/

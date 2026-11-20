@@ -367,8 +367,12 @@ describe('zip export (Underleaf -> Overleaf)', () => {
       { abs: path.join(tmp, 'vanished.tex'), rel: 'vanished.tex', isDir: false },
       { abs: path.join(tmp, 'also-gone.png'), rel: 'figures/also-gone.png', isDir: false }
     ]
-    await expect(createZip(entries, dest)).rejects.toThrow()
-    expect((await fs.readdir(tmp)).filter((n) => n.startsWith('broken.zip'))).toEqual([])
+    // Several times: whether the temporary file was removed used to depend on
+    // how far the output stream had got with opening it.
+    for (let round = 0; round < 25; round++) {
+      await expect(createZip(entries, dest)).rejects.toThrow()
+      expect((await fs.readdir(tmp)).filter((n) => n.startsWith('broken.zip'))).toEqual([])
+    }
     // A failed attempt does not destroy an archive that is already there.
     await fs.writeFile(dest, 'previous archive')
     await expect(createZip(entries, dest)).rejects.toThrow()

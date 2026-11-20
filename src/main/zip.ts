@@ -164,7 +164,14 @@ export async function createZip(entries: ZipInput[], destZip: string): Promise<v
     await fsp.rm(destZip, { force: true })
     await fsp.rename(tmp, destZip)
   } catch (err) {
-    out.destroy()
+    // The stream may still be busy opening the file. Removing it before the
+    // stream has let go would come too early: the file would be created
+    // afterwards and stay behind.
+    await new Promise<void>((resolve) => {
+      if (out.closed) return resolve()
+      out.once('close', () => resolve())
+      out.destroy()
+    })
     await fsp.rm(tmp, { force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined)
     throw err
   }

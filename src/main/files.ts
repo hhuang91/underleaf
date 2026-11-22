@@ -104,7 +104,7 @@ async function requireRoot(root: string): Promise<void> {
  * linked folders itself, so nothing it offers goes through one; this guards
  * the file operations against paths that do.
  */
-async function assertContained(root: string, dir: string): Promise<void> {
+export async function assertContained(root: string, dir: string): Promise<void> {
   const realRoot = await fs.realpath(root)
   let probe = dir
   for (;;) {

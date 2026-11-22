@@ -37,9 +37,9 @@ The archive contains only your sources: no build files, no editor settings, no
 **Going back and forth.** When you upload a `.zip` whose name matches a project
 you already have, Underleaf asks whether to **update the existing project** or
 **keep both**. Updating replaces the files in place, keeps the project's
-settings and git history, and moves the previous files to the recycle bin, so
-a round trip never loses anything. If the folder is a git repository,
-`git diff` then shows exactly what changed online.
+settings and its versions, and moves the previous files to the recycle bin, so
+a round trip never loses anything. A version is saved before and after the
+update, and the **History** screen then shows exactly what changed online.
 
 ## What is in the box
 
@@ -58,6 +58,10 @@ a round trip never loses anything. If the folder is a git repository,
 - **Projects** – create, copy, rename, delete (to the recycle bin), search,
   word count, file outline, upload by dialog or drag and drop, move files by
   dragging them in the tree, set the main document.
+- **Version history** – every project keeps its versions in a git repository
+  inside its folder. Save one under a name whenever you like; Underleaf also
+  saves them by itself while you work. Compare any two states, and put a file
+  or the whole project back. See [Version history](#version-history).
 - **Plain folders** – no database. A project is a folder inside the library
   (by default `Documents/Underleaf`); folders you copy or `git clone` there
   show up automatically, and **New Project → Open Existing Folder** links a
@@ -75,6 +79,62 @@ Keyboard shortcuts match Overleaf where it matters: `Ctrl/⌘+Enter` or
 `Ctrl/⌘+S` recompiles, `Ctrl/⌘+F` searches, `Ctrl/⌘+B` / `Ctrl/⌘+I` make text
 bold or italic, `Ctrl/⌘+/` toggles a comment. **Menu → Help → Show Hotkeys**
 lists the rest.
+
+## Version history
+
+Click **History** in the toolbar to see the versions of a project, newest
+first.
+
+- **Save version** (also `Ctrl/⌘+Shift+S`) keeps the project as it is under a
+  name of your choice.
+- Underleaf saves versions by itself as well: after ten edits, when a project
+  is opened or closed with changes, and before and after an archive updates
+  it. An *edit* is any amount of changes followed by five seconds without one,
+  so typing a paragraph is one edit, not hundreds. Both numbers, and whether
+  this happens at all, are under **Settings → Version history**.
+- Select a version to see the files it changed and, for each file, what
+  changed in it. **Since this version** compares it with the project as it is
+  now instead.
+- **Restore this version** puts every file back the way it was, and
+  **Restore this file** just one. What a restore replaces is saved as a
+  version first, so a restore can be undone the same way. For that reason a
+  restore only touches files that versions are kept of: a file that is left
+  out of versions (see below) is neither replaced nor removed, and Underleaf
+  tells you when that leaves something as it is.
+
+Versions are git commits in a `.git` folder inside the project folder, so any
+git tool can read them:
+
+- In a project that had no repository, Underleaf creates one. The versions you
+  save by name are ordinary commits on its branch, as `git log` shows. The
+  automatic ones are kept beside the branch, under `refs/underleaf/`, where
+  they do not clutter its history and can be thinned out: all of the last two
+  days are kept, of older days the last one each. The copies made before a
+  restore, and before and after an archive updates the project, are not
+  thinned out.
+- In a folder that already is a git repository, or is part of one, Underleaf
+  never commits to your branches and never touches the index. All of its
+  versions go under `refs/underleaf/`. The commits of your own branch are
+  listed in the History screen as well (when the project is the top folder of
+  the repository).
+- `git log --all`, and tools that show every ref, list the versions under
+  `refs/underleaf/` too.
+- The `.git` folder is left out of **Download → Source** and of
+  **Copy Project**.
+
+Which files a version holds is decided the way git decides it: everything in
+the folder except what `.gitignore` files, `.git/info/exclude` and your own
+ignore file for all repositories rule out, and always the files that the
+repository's branch already has. Also left out are files of more than 100 MB,
+and folders that are repositories of their own (submodules, clones). A version
+holds a compressed copy of every file, so a project folder grows when large
+files change often.
+
+Some things are for git itself: pushing to GitHub or to Overleaf's git access
+is not built in; a file that a repository stores with Git LFS can be compared
+but not restored; and Underleaf keeps no versions in a linked work tree, in a
+project folder that is a submodule, or in a repository that uses SHA-256
+object names or the reftable format (the History screen says so).
 
 ## TeX engines
 
@@ -196,6 +256,7 @@ UNDERLEAF_E2E_REAL_ENGINE=1 npm run test:e2e
 src/main/        Electron main process
   projects.ts      project library, zip import/export
   files.ts         file operations inside a project
+  history.ts       versions of a project, kept in git
   compile/         build mirror, engines, log parser, SyncTeX reader
 src/preload/     the bridge exposed to the UI as window.api
 src/renderer/    React UI (dashboard, editor, PDF viewer)
@@ -210,6 +271,7 @@ tests/           unit tests, the fake engine, the end-to-end smoke test
 | What | Windows | macOS |
 | --- | --- | --- |
 | Projects | `Documents\Underleaf` (changeable in Settings) | `~/Documents/Underleaf` |
+| Versions of a project | `.git` inside the project's folder | the same |
 | Settings | `%APPDATA%\Underleaf` | `~/Library/Application Support/Underleaf` |
 | Build files (safe to delete) | `%LOCALAPPDATA%\Underleaf\build` | `~/Library/Caches/Underleaf/build` |
 | Built-in engine's package cache | `%LOCALAPPDATA%\TectonicProject\Tectonic` | `~/Library/Caches/Tectonic` |
@@ -220,10 +282,9 @@ main-document choice. It is never included in exported archives.
 ## Not included
 
 Things that only make sense online, or that are out of scope for now:
-real-time collaboration, comments and track changes, project history (use git
-in the project folder), the visual (rich text) editor, and direct syncing with
-an Overleaf account. Moving projects is done with `.zip` files as described
-above.
+real-time collaboration, comments and track changes, the visual (rich text)
+editor, pushing versions to a git remote, and direct syncing with an Overleaf
+account. Moving projects is done with `.zip` files as described above.
 
 ## License
 

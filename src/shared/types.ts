@@ -50,6 +50,18 @@ export interface WindowBounds {
   maximized: boolean
 }
 
+export interface HistorySettings {
+  /** Save versions of the open project automatically. */
+  auto: boolean
+  /** An automatic version is saved after this many edits. */
+  editsPerVersion: number
+  /**
+   * What counts as one edit: any amount of changes, followed by this many
+   * seconds without one.
+   */
+  editPauseSeconds: number
+}
+
 export interface AppSettings {
   /** Folder that holds one sub-folder per project. */
   libraryPath: string
@@ -63,6 +75,7 @@ export interface AppSettings {
   overallTheme: OverallTheme
   editor: EditorSettings
   layout: LayoutSettings
+  history: HistorySettings
   /** 'page-width', 'page-height' or a numeric scale such as '1.25'. */
   pdfZoom: string
   /** Project folder -> file that was open last time. */
@@ -168,6 +181,73 @@ export interface WordCount {
   mathInline: number
   mathDisplay: number
   files: number
+}
+
+// ----------------------------------------------------------------- history
+
+/** A saved state of the whole project (a git commit). */
+export interface VersionInfo {
+  /** The commit id. */
+  id: string
+  /** 'named' was saved by the user under a name, 'auto' by the app. */
+  kind: 'named' | 'auto'
+  /** The name the user gave it, or why it was saved automatically. */
+  label: string
+  /** Milliseconds since the epoch. */
+  time: number
+  author: string
+  /**
+   * A commit on the repository's own branch, as opposed to one that Underleaf
+   * keeps on the side (see src/main/history.ts).
+   */
+  onBranch: boolean
+}
+
+export interface HistoryList {
+  /**
+   * 'own': a repository Underleaf created for the project; saving a version
+   * by name commits to its branch. 'yours': a repository that was already
+   * there; Underleaf keeps its versions beside your branches and never commits
+   * to them. 'none': nothing has been saved yet. 'unsupported': the folder's
+   * version control is of a kind Underleaf does not work with.
+   */
+  repository: 'own' | 'yours' | 'none' | 'unsupported'
+  /** Why, when the repository is unsupported. */
+  reason?: string
+  /** Newest first. */
+  versions: VersionInfo[]
+  /** There are older versions than the ones listed. */
+  more: boolean
+}
+
+export interface VersionChange {
+  /** POSIX-style path relative to the project root. */
+  path: string
+  status: 'added' | 'modified' | 'deleted'
+}
+
+/** One file in two states, for showing what changed. Null: no such file in that state. */
+export type VersionFile =
+  | { kind: 'text'; before: string | null; after: string | null }
+  | { kind: 'image'; mime: string; before: Uint8Array | null; after: Uint8Array | null }
+  | { kind: 'binary'; before: number | null; after: number | null }
+
+/** A version id, or the files as they are in the project folder right now. */
+export type VersionRef = string | 'current'
+
+/** What a restore left undone. Empty lists: everything is as it was in the version. */
+export interface RestoreResult {
+  /**
+   * Files that were left as they are on purpose: 'unversioned' is a file in
+   * the folder that Underleaf keeps no versions of (git ignores it, it is too
+   * large, or it is in a folder that is a repository of its own), so replacing
+   * it could not be undone; 'lfs' is a file that the version only has a Git
+   * LFS pointer for; 'link' is a symbolic link, now or in the version; 'name'
+   * cannot exist on this system.
+   */
+  left: Array<{ path: string; reason: 'unversioned' | 'lfs' | 'link' | 'name' }>
+  /** Files that could not be written or removed (read-only, in use, ...). */
+  failed: Array<{ path: string; message: string }>
 }
 
 // ----------------------------------------------------------------- compile

@@ -154,6 +154,98 @@ export function SettingsModal({ onClose, insideProject }: SettingsModalProps): R
           )}
         </div>
       </section>
+
+      <section className="settings-section">
+        <h3>Version history</h3>
+        <p className="muted">
+          Versions of a project are kept in a git repository inside its folder. Save one under a name whenever
+          you like; Underleaf can also save them by itself while you work.
+        </p>
+        <label className="settings-toggle">
+          <span className="switch">
+            <input
+              type="checkbox"
+              checked={settings.history.auto}
+              onChange={(e) => void patchSettings({ history: { auto: e.target.checked } })}
+            />
+            <span className="track" />
+          </span>
+          Save versions automatically
+        </label>
+        <div className="settings-numbers">
+          <div className="field">
+            <label htmlFor="history-edits">Save a version after this many edits</label>
+            <NumberInput
+              id="history-edits"
+              value={settings.history.editsPerVersion}
+              min={1}
+              max={1000}
+              disabled={!settings.history.auto}
+              onCommit={(n) => void patchSettings({ history: { editsPerVersion: n } })}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="history-pause">Seconds without a change that end an edit</label>
+            <NumberInput
+              id="history-pause"
+              value={settings.history.editPauseSeconds}
+              min={1}
+              max={600}
+              disabled={!settings.history.auto}
+              onCommit={(n) => void patchSettings({ history: { editPauseSeconds: n } })}
+            />
+          </div>
+        </div>
+        <div className="hint">
+          Typing, a pause, and typing again are two edits; keystrokes are not counted one by one. A version is
+          also saved when a project is opened or closed with changes, and before anything replaces its files.
+        </div>
+      </section>
     </Modal>
+  )
+}
+
+/** A whole number that is applied when the field is left (or Enter is pressed), within its limits. */
+function NumberInput(props: {
+  id: string
+  value: number
+  min: number
+  max: number
+  disabled?: boolean
+  onCommit: (value: number) => void
+}): React.JSX.Element {
+  const [text, setText] = useState(String(props.value))
+  const [shown, setShown] = useState(props.value)
+  // Follow a value that changed elsewhere (it is clamped when it is saved).
+  if (shown !== props.value) {
+    setShown(props.value)
+    setText(String(props.value))
+  }
+  const commit = (): void => {
+    const n = Math.round(Number(text))
+    if (!Number.isFinite(n)) {
+      setText(String(props.value))
+      return
+    }
+    const clamped = Math.min(props.max, Math.max(props.min, n))
+    setText(String(clamped))
+    if (clamped !== props.value) props.onCommit(clamped)
+  }
+  return (
+    <input
+      id={props.id}
+      className="input settings-number"
+      type="number"
+      inputMode="numeric"
+      min={props.min}
+      max={props.max}
+      value={text}
+      disabled={props.disabled}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+      }}
+    />
   )
 }

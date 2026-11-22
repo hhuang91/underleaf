@@ -102,6 +102,9 @@ async function until(check, what, timeout = 15_000) {
 
 const exists = (p) => fs.stat(p).then(() => true, () => false)
 
+/** What is in a project folder, apart from the repository that holds its versions. */
+const filesIn = async (dir) => (await fs.readdir(dir)).filter((name) => name !== '.git').sort()
+
 /**
  * Waits until the editor has nothing left to write. It saves a moment after
  * the last key, and the indicator takes a moment to say so, so "Saved" only
@@ -185,7 +188,7 @@ try {
   await shot(win, 'editor')
 
   const projectDir = path.join(library, 'Demo Paper')
-  assert.deepEqual((await fs.readdir(projectDir)).sort(), ['figures', 'main.tex', 'references.bib'])
+  assert.deepEqual(await filesIn(projectDir), ['figures', 'main.tex', 'references.bib'])
 
   // ------------------------------------------------ typing is auto-saved
   await win.click('.cm-content')
@@ -364,7 +367,7 @@ try {
   await win.fill('.tree-rename', 'todo.tex')
   await win.keyboard.press('Enter')
   await win.waitForFunction(() => [...document.querySelectorAll('.tree-item')].some((e) => e.textContent?.includes('todo.tex')))
-  assert.deepEqual((await fs.readdir(projectDir)).sort(), ['figures', 'main.tex', 'references.bib', 'todo.tex'])
+  assert.deepEqual(await filesIn(projectDir), ['figures', 'main.tex', 'references.bib', 'todo.tex'])
   await win.click('.cm-content')
   await win.keyboard.press(`${mod}+f`)
   await win.waitForSelector('.cm-search')
@@ -581,8 +584,153 @@ try {
   await win.click('.dropdown-item >> text=PDF only')
   await win.waitForFunction(() => getComputedStyle(document.querySelector('.ide-editor')).display === 'none')
   await shot(win, 'layout-pdf-only')
+
+  // A compile that finishes while the PDF is out of sight: the new document
+  // waits there and is in place when the pane comes back. (The viewer must
+  // not try to position a page that has no size; it logs an error if it does,
+  // which the check at the end of this test would catch.)
+  await win.click('.toolbar-btn >> text=Layout')
+  await win.click('.dropdown-item >> text=Editor only')
+  await win.waitForFunction(() => getComputedStyle(document.querySelector('.ide-pdf')).display === 'none')
+  const newestPdf = async (dir = path.join(tmp, 'cache')) => {
+    let newest = 0
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) newest = Math.max(newest, await newestPdf(full))
+      else if (entry.name.endsWith('.pdf')) newest = Math.max(newest, (await fs.stat(full)).mtimeMs)
+    }
+    return newest
+  }
+  const pdfBefore = await newestPdf()
+  await win.click('.cm-content')
+  await win.keyboard.press(`${mod}+Enter`)
+  await until(async () => (await newestPdf()) > pdfBefore, 'the compile to write a new PDF', compileTimeout)
+  await win.waitForFunction(() => !document.querySelector('.split-main')?.textContent?.includes('Compiling'), null, {
+    timeout: compileTimeout
+  })
+  await win.waitForTimeout(1200) // long enough for the hidden pane to have loaded it
   await win.click('.toolbar-btn >> text=Layout')
   await win.click('.dropdown-item >> text=Editor & PDF')
+  await waitForPdf(win)
+
+  // ------------------------------------------------------------- versions
+  // Save the project as it is under a name ...
+  await win.click('.toolbar-btn >> text=Menu')
+  await win.click('.drawer-link >> text=Save Version')
+  await win.fill('#prompt-input', 'Before the rewrite')
+  await win.click('.modal-footer >> text=Save')
+  await win.waitForFunction(() =>
+    [...document.querySelectorAll('.toast.success')].some((t) => t.textContent?.includes('Before the rewrite'))
+  )
+  const beforeRewrite = await onDisk('main.tex')
+
+  // ... change it ...
+  await win.click('.cm-content')
+  await win.keyboard.press(`${mod}+End`)
+  await win.keyboard.type('\n% a line that the history test adds')
+  await until(async () => (await onDisk('main.tex')).includes('% a line that the history test adds'), 'the new line to be saved')
+  await fs.writeFile(path.join(projectDir, 'scratch.tex'), 'A file that the version does not have.\n')
+  await win.waitForFunction(
+    () => [...document.querySelectorAll('.tree-item')].some((e) => e.textContent?.includes('scratch.tex')),
+    null,
+    { timeout: 10_000 }
+  )
+
+  // ... and look at the history: newest first, down to how the project was when it was first opened.
+  await win.click('.toolbar-btn >> text=History')
+  await win.waitForSelector('.history .version.selected')
+  const versionLabels = await win.locator('.version-label').allInnerTexts()
+  assert.equal(versionLabels[0], 'Before the rewrite')
+  assert.equal(versionLabels[versionLabels.length - 1], 'First version')
+
+  // What has changed since that version: one file edited, one new.
+  const changeList = async () => (await win.locator('.change').allInnerTexts()).map((t) => t.replace(/\s+/g, ' ').trim())
+  await win.click('.history-compare >> text=Since this version')
+  await win.waitForFunction(() => document.querySelectorAll('.change').length === 2)
+  assert.deepEqual(await changeList(), ['main.tex edited', 'scratch.tex new'])
+  await win.click('.change >> text=main.tex')
+  await win.waitForFunction(() =>
+    [...document.querySelectorAll('.history-text .cm-insertedLine, .history-text .cm-changedLine')].some((line) =>
+      line.textContent?.includes('a line that the history test adds')
+    )
+  )
+  await shot(win, 'history')
+
+  // Going back to the version undoes both, in the folder and in the editor.
+  await win.click('.history-timeline footer >> text=Restore this version')
+  await win.click('.modal-footer >> text=Restore')
+  await win.waitForFunction(() => !document.querySelector('.history'))
+  await until(async () => (await onDisk('main.tex')) === beforeRewrite, 'main.tex to be put back')
+  assert.equal(await exists(path.join(projectDir, 'scratch.tex')), false)
+  await win.waitForFunction(
+    () => ![...document.querySelectorAll('.tree-item')].some((e) => e.textContent?.includes('scratch.tex')),
+    null,
+    { timeout: 10_000 }
+  )
+  await waitForMainTex(win)
+
+  // What the restore replaced is a version as well, and one file of it can be taken back by itself.
+  await win.click('.toolbar-btn >> text=History')
+  await win.waitForSelector('.history .version.selected')
+  assert.equal(await win.locator('.version-label').first().innerText(), 'Before restoring an earlier version')
+  await win.waitForFunction(() => document.querySelectorAll('.change').length === 2)
+  assert.deepEqual(await changeList(), ['main.tex edited', 'scratch.tex new'])
+  await win.click('.change >> text=scratch.tex')
+  await win.waitForFunction(() => document.querySelector('.history-text .cm-content')?.textContent?.includes('does not have'))
+  await win.click('.history-diff-header >> text=Restore this file')
+  await win.click('.modal-footer >> text=Restore')
+  await until(() => exists(path.join(projectDir, 'scratch.tex')), 'scratch.tex to be put back')
+  assert.equal(await onDisk('scratch.tex'), 'A file that the version does not have.\n')
+  assert.equal(await onDisk('main.tex'), beforeRewrite, 'the rest of the project stays as it is')
+  await win.click('.history-diff-header >> text=Back to editor')
+  await win.waitForFunction(() => !document.querySelector('.history'))
+  await waitForMainTex(win)
+
+  // A restore does not replace a file that no version is kept of (here: one
+  // that git is told to ignore, so that the copy made before would not have
+  // it), and says so.
+  await fs.writeFile(path.join(projectDir, '.gitignore'), 'scratch.tex\n')
+  await fs.writeFile(path.join(projectDir, 'scratch.tex'), 'Private notes that are in no version.\n')
+  await win.click('.toolbar-btn >> text=History')
+  await win.waitForSelector('.history .version.selected')
+  // The older of the two copies is the one that has scratch.tex.
+  await win.locator('.version:has-text("Before restoring an earlier version")').nth(1).click()
+  await win.waitForFunction(() =>
+    [...document.querySelectorAll('.change')].some((c) => c.textContent?.includes('scratch.tex'))
+  )
+  await win.click('.history-timeline footer >> text=Restore this version')
+  await win.click('.modal-footer >> text=Restore')
+  await win.waitForSelector('.modal[aria-label="Not everything was restored"]')
+  const report = await win.locator('.modal').innerText()
+  assert.match(report, /scratch\.tex/)
+  assert.match(report, /keeps no versions of what is there now/)
+  await shot(win, 'history-report')
+  await win.click('.modal-footer >> text=Close')
+  await win.waitForFunction(() => !document.querySelector('.modal'))
+  assert.equal(await onDisk('scratch.tex'), 'Private notes that are in no version.\n')
+  assert.match(await onDisk('main.tex'), /a line that the history test adds/, 'the files that versions are kept of are restored')
+  assert.equal(await exists(path.join(projectDir, '.gitignore')), false)
+  // Back to the named version once more. Nothing is in the way this time
+  // (the notes are no longer ignored, so the copy made before has them).
+  await win.click('.version >> text=Before the rewrite')
+  await win.waitForFunction(() => document.querySelector('.version.selected')?.textContent?.includes('Before the rewrite'))
+  await win.click('.history-timeline footer >> text=Restore this version')
+  await win.click('.modal-footer >> text=Restore')
+  await win.waitForFunction(() => !document.querySelector('.history'))
+  await until(async () => (await onDisk('main.tex')) === beforeRewrite, 'main.tex to be put back again')
+  assert.equal(await exists(path.join(projectDir, 'scratch.tex')), false)
+  await waitForMainTex(win)
+
+  // The versions are a git repository in the project folder, which is not listed among its files.
+  assert.equal(await exists(path.join(projectDir, '.git', 'HEAD')), true)
+  assert.equal(await win.locator('.tree-item:has-text(".git")').count(), 0)
+  await fs.rm(path.join(projectDir, 'scratch.tex'), { force: true })
+  await win.waitForFunction(
+    () => ![...document.querySelectorAll('.tree-item')].some((e) => e.textContent?.includes('scratch.tex')),
+    null,
+    { timeout: 10_000 }
+  )
+  await waitForPdf(win)
 
   // -------------------------------------------- download zip and the PDF
   const zipPath = path.join(tmp, 'Demo Paper.zip')
@@ -612,7 +760,7 @@ try {
   await win.click('.modal-footer >> text=Copy')
   await win.waitForFunction(() => document.querySelectorAll('.project-link').length === 2)
   assert.deepEqual(
-    (await fs.readdir(path.join(library, 'Demo Paper (Copy)'))).sort(),
+    await filesIn(path.join(library, 'Demo Paper (Copy)')),
     ['.underleaf.json', 'figures', 'main.tex', 'references.bib', 'todo.tex']
   )
   await win.click('tr:has-text("Demo Paper (Copy)") .row-actions button >> nth=4')
@@ -636,7 +784,7 @@ try {
   await win.waitForSelector('.ide .cm-content')
   await win.waitForFunction(() => document.querySelector('.project-name')?.textContent?.includes('Demo Paper (1)'))
   await waitForPdf(win)
-  assert.deepEqual((await fs.readdir(path.join(library, 'Demo Paper (1)'))).sort(), ['figures', 'main.tex', 'references.bib', 'todo.tex'])
+  assert.deepEqual(await filesIn(path.join(library, 'Demo Paper (1)')), ['figures', 'main.tex', 'references.bib', 'todo.tex'])
 
   // ------------------------------------ rename the project from the editor
   await win.click('.project-name')
@@ -671,11 +819,21 @@ try {
   await win.waitForFunction(() => document.querySelector('.project-name')?.textContent?.trim().startsWith('Demo Paper'))
   // The files come from the archive; the project's own settings are kept.
   assert.deepEqual(
-    (await fs.readdir(projectDir)).sort(),
+    await filesIn(projectDir),
     ['.underleaf.json', 'figures', 'main.tex', 'references.bib', 'todo.tex']
   )
   assert.equal((await readMeta()).compiler, 'pdflatex')
   await waitForPdf(win)
+  // The history has both sides of the update, so what the archive changed can
+  // be looked at: here, the file that only existed locally is gone.
+  await win.click('.toolbar-btn >> text=History')
+  await win.waitForSelector('.history .version.selected')
+  const afterUpdate = await win.locator('.version-label').allInnerTexts()
+  assert.deepEqual(afterUpdate.slice(0, 2), ['Updated from Demo Paper.zip', 'Before updating from Demo Paper.zip'])
+  await win.waitForFunction(() => document.querySelectorAll('.change').length === 1)
+  assert.deepEqual(await changeList(), ['local-only.tex deleted'])
+  await win.click('.history-diff-header >> text=Back to editor')
+  await win.waitForFunction(() => !document.querySelector('.history'))
 
   // ------------------------------------------------------ delete a project
   await win.click('.toolbar-btn[title="Back to your projects"]')

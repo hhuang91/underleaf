@@ -29,6 +29,11 @@ export function defaultSettings(libraryPath: string): AppSettings {
       editorRatio: 0.5,
       outlineOpen: true
     },
+    history: {
+      auto: true,
+      editsPerVersion: 10,
+      editPauseSeconds: 5
+    },
     pdfZoom: 'page-width',
     lastOpenFile: {},
     trustedRc: {},
@@ -106,6 +111,8 @@ function normalise(s: AppSettings): AppSettings {
   s.editor.fontSize = clamp(Math.round(s.editor.fontSize), 8, 32)
   s.layout.fileTreeWidth = clamp(Math.round(s.layout.fileTreeWidth), 140, 600)
   s.layout.editorRatio = clamp(s.layout.editorRatio, 0.15, 0.85)
+  s.history.editsPerVersion = clamp(Math.round(s.history.editsPerVersion), 1, 1000)
+  s.history.editPauseSeconds = clamp(Math.round(s.history.editPauseSeconds), 1, 600)
   return s
 }
 

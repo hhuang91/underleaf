@@ -14,8 +14,9 @@ import {
 import { EVENTS } from '@shared/channels'
 import { ProjectAnalyzer } from './analysis'
 import { CompileManager } from './compile'
+import { HistoryManager } from './history'
 import { registerIpc } from './ipc'
-import { ProjectLibrary } from './projects'
+import { encodeProjectId, ProjectLibrary } from './projects'
 import { defaultSettings, SettingsStore } from './settings'
 import { isInside } from './util/fsx'
 import { ProjectWatcher } from './watcher'
@@ -43,6 +44,7 @@ let quitting = false
 let settings: SettingsStore
 const watcher = new ProjectWatcher()
 let compiler: CompileManager
+let history: HistoryManager | null = null
 
 // ---------------------------------------------------------------- paths
 
@@ -205,6 +207,9 @@ function buildMenu(): void {
       { label: 'Download Source (.zip)…', click: () => sendMenuCommand('download-zip') },
       { label: 'Download PDF…', click: () => sendMenuCommand('download-pdf') },
       { type: 'separator' },
+      { label: 'Save Version…', accelerator: 'CmdOrCtrl+Shift+S', click: () => sendMenuCommand('save-version') },
+      { label: 'History', accelerator: 'CmdOrCtrl+Shift+H', click: () => sendMenuCommand('history') },
+      { type: 'separator' },
       { label: 'Back to Projects', click: () => sendMenuCommand('go-home') },
       { type: 'separator' },
       isMac ? { role: 'close' } : { role: 'quit' }
@@ -335,10 +340,16 @@ function createWindow(): void {
 
     let settled = false
     const proceed = (): void => {
-      closing = 'yes'
-      // Cancelling the close also cancelled a pending quit (Cmd+Q); resume it.
-      if (quitting) app.quit()
-      else if (!win.isDestroyed()) win.close()
+      const finish = (): void => {
+        closing = 'yes'
+        // Cancelling the close also cancelled a pending quit (Cmd+Q); resume it.
+        if (quitting) app.quit()
+        else if (!win.isDestroyed()) win.close()
+      }
+      // What was changed since the last version is kept as one. A slow disk
+      // must not hold the window open for long, though.
+      const kept = history?.flushAll() ?? Promise.resolve()
+      void Promise.race([kept, new Promise((resolve) => setTimeout(resolve, 5000))]).then(finish, finish)
     }
     const settle = (saved: boolean): void => {
       if (settled) return
@@ -417,13 +428,22 @@ async function bootstrap(): Promise<void> {
     await fsp.mkdir(trashDir, { recursive: true })
     await fsp.rename(target, path.join(trashDir, `${Date.now()}-${path.basename(target)}`))
   }
+  const versions = new HistoryManager({
+    settings: () => settings.get().history,
+    onChanged: (dir) => mainWindow?.webContents.send(EVENTS.historyChanged, { id: encodeProjectId(dir) })
+  })
+  history = versions
   const library = new ProjectLibrary({
     libraryPath: () => settings.get().libraryPath,
     externalProjects: () => settings.get().externalProjects,
     setExternalProjects: async (list) => {
       await settings.update({ externalProjects: list })
     },
-    trash
+    trash,
+    // An archive that updates a project: the state before and the state it
+    // brought are both versions, so what changed elsewhere can be looked at.
+    beforeReplace: (dir, archive) => versions.saveAuto(dir, 'before-import', archive),
+    afterReplace: (dir, archive) => versions.saveAuto(dir, 'after-import', archive)
   })
 
   const rc = resourcePath('latexmkrc')
@@ -447,6 +467,7 @@ async function bootstrap(): Promise<void> {
     compiler,
     analyzer: new ProjectAnalyzer(),
     watcher,
+    history: versions,
     window: () => mainWindow,
     trustedOrigins: DEV_URL ? [`${APP_ORIGIN}/`, DEV_URL] : [`${APP_ORIGIN}/`],
     trash

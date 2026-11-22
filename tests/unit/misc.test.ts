@@ -201,16 +201,24 @@ describe('third-party licences', () => {
     try {
       const out = path.join(dir, 'licences.txt')
       const script = path.resolve(__dirname, '../../scripts/collect-licenses.mjs')
+      // The script fails when a package comes without a licence text that it
+      // cannot supply itself, which needs a look by a person.
       const report = execFileSync(process.execPath, [script, '--out', out], { encoding: 'utf8' })
-      // A package without a licence file of its own needs a look by a person.
-      expect(report).not.toContain('without a licence file')
+      expect(report).toMatch(/^Licences of \d+ packages/)
 
       const text = await fs.readFile(out, 'utf8')
+      // Every package section holds a licence text (some bring none; a standard one is used).
+      const sections = text.split(/^-{78}\n(?=\S+ \d+\.\d+)/m).slice(1)
+      expect(sections.length).toBeGreaterThan(20)
+      for (const section of sections.filter((s) => /^Licence: /m.test(s))) {
+        expect(section.length, section.split('\n')[0]).toBeGreaterThan(400)
+      }
+      expect(text).toMatch(/^clean-git-ref \d[\s\S]{0,400}contains no licence file[\s\S]{0,300}Copyright Eli White/m)
       const listed = (name: string): boolean =>
         new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')} \\d+\\.\\d+\\.\\d+`, 'm').test(text)
 
       // Libraries the app imports, directly or through another library ...
-      for (const name of ['react', 'react-dom', 'scheduler', 'zustand', 'pdfjs-dist', '@codemirror/view', '@lezer/common', 'yauzl', 'yazl', '@mdi/js']) {
+      for (const name of ['react', 'react-dom', 'scheduler', 'zustand', 'pdfjs-dist', '@codemirror/view', '@codemirror/merge', '@lezer/common', 'yauzl', 'yazl', '@mdi/js', 'isomorphic-git', 'ignore', 'pako']) {
         expect(listed(name), name).toBe(true)
       }
       // ... but not the tools that build and test it.

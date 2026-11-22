@@ -106,13 +106,19 @@ export async function readJson<T>(file: string): Promise<T | null> {
 /** Writes via a temporary file so a crash never leaves a half-written file. */
 export async function writeFileAtomic(file: string, data: string | Uint8Array): Promise<void> {
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  await fs.writeFile(tmp, data)
+  let renamed = false
   try {
-    await fs.rename(tmp, file)
-  } catch {
-    // Windows refuses to replace a file that another process holds open.
-    await fs.writeFile(file, data)
-    await fs.rm(tmp, { force: true })
+    await fs.writeFile(tmp, data)
+    try {
+      await fs.rename(tmp, file)
+      renamed = true
+    } catch {
+      // Windows refuses to replace a file that another process holds open.
+      await fs.writeFile(file, data)
+    }
+  } finally {
+    // Whatever went wrong, the temporary file must not stay behind.
+    if (!renamed) await fs.rm(tmp, { force: true }).catch(() => undefined)
   }
 }
 

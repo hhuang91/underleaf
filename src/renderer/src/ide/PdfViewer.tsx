@@ -65,6 +65,40 @@ export function PdfViewer({ pdf, initialZoom, onZoomChange, onInverseSearch }: P
   )
 }
 
+type PdfDocument = Awaited<ReturnType<typeof loadPdf>['promise']>
+
+/**
+ * PDF.js asks a document for its pages in the background as soon as it is
+ * shown, and what it does when an answer arrives, or cannot arrive any more,
+ * takes for granted that the document is still open in the viewer: it logs an
+ * error for every page of a document that was closed in the meantime. A
+ * document that is replaced right after it arrived (two compiles in quick
+ * succession) is therefore closed only once nothing is being asked of it.
+ * Returns a function that resolves when that is the case.
+ */
+function trackRequests(doc: PdfDocument): () => Promise<void> {
+  const pending = new Set<Promise<unknown>>()
+  const methods = doc as unknown as Record<string, (...args: unknown[]) => Promise<unknown>>
+  for (const name of ['getPage', 'getMetadata', 'getOptionalContentConfig', 'getPermissions']) {
+    const ask = methods[name]
+    if (typeof ask !== 'function') continue
+    methods[name] = (...args) => {
+      const request = ask.apply(doc, args)
+      const done = (): void => void pending.delete(request)
+      pending.add(request)
+      request.then(done, done)
+      return request
+    }
+  }
+  return async () => {
+    // An answer can lead to more requests (the pages are asked for in batches).
+    while (pending.size > 0) {
+      await Promise.allSettled([...pending])
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+  }
+}
+
 interface PdfLayerProps {
   data: Uint8Array
   version: number
@@ -111,9 +145,11 @@ const PdfLayer = memo(function PdfLayer(props: PdfLayerProps): React.JSX.Element
     const fallback = window.setTimeout(markReady, 3000)
 
     const task = loadPdf(data)
+    let idle: (() => Promise<void>) | null = null
     task.promise.then(
       (doc) => {
         if (disposed) return // the cleanup below already destroyed the loading task
+        idle = trackRequests(doc)
         viewer.setDocument(doc)
         linkService.setDocument(doc, null)
       },
@@ -131,16 +167,27 @@ const PdfLayer = memo(function PdfLayer(props: PdfLayerProps): React.JSX.Element
       }
     )
 
-    eventBus.on('pagesinit', () => {
-      // Continue exactly where the previous version of the document was.
+    // Continue exactly where the previous version of the document was. The
+    // pane can be out of sight when a document arrives (the "Editor only"
+    // layout, or the History screen is up); PDF.js cannot place a page that
+    // has no size, so that waits until the pane is back.
+    let placed = false
+    const place = (): void => {
+      if (placed || disposed || !viewer.pdfDocument || container.clientWidth === 0) return
+      placed = true
       viewer.currentScaleValue = view.current.scale
       container.scrollTop = view.current.scrollTop
       container.scrollLeft = view.current.scrollLeft
+    }
+
+    eventBus.on('pagesinit', () => {
+      if (disposed) return // on its way out; see the cleanup below
+      place()
       if (activeRef.current) pdfControl.setActive({ viewer, container, overlay })
     })
 
     eventBus.on('pagerendered', (e: { source: { div: HTMLElement } }) => {
-      if (ready) return
+      if (ready || disposed) return
       const div = e.source.div
       const top = div.offsetTop - container.scrollTop
       if (top < container.clientHeight && top + div.offsetHeight > 0) markReady()
@@ -187,8 +234,13 @@ const PdfLayer = memo(function PdfLayer(props: PdfLayerProps): React.JSX.Element
       resizeTimer = window.setTimeout(() => {
         resizeTimer = null
         if (disposed || !viewer.pdfDocument || container.clientWidth === 0) return
-        const current = viewer.currentScaleValue
-        if (presetOf(current)) viewer.currentScaleValue = current
+        if (!placed) {
+          // The pane has just come into sight with a document that arrived meanwhile.
+          place()
+        } else {
+          const current = viewer.currentScaleValue
+          if (presetOf(current)) viewer.currentScaleValue = current
+        }
         viewer.update()
       }, 80)
     })
@@ -204,13 +256,18 @@ const PdfLayer = memo(function PdfLayer(props: PdfLayerProps): React.JSX.Element
       container.removeEventListener('dblclick', onDoubleClick)
       if (pdfControl.isActive(viewer)) pdfControl.setActive(null)
       viewerRef.current = null
-      try {
-        viewer.setDocument(null)
-        linkService.setDocument(null, null)
-      } catch {
-        /* the viewer was never fully initialised */
+      const close = (): void => {
+        try {
+          viewer.setDocument(null)
+          linkService.setDocument(null, null)
+        } catch {
+          /* the viewer was never fully initialised */
+        }
+        void task.destroy()
       }
-      void task.destroy()
+      // Not under the hands of PDF.js: see trackRequests.
+      if (idle) void idle().then(close)
+      else close()
     }
     // A layer is created for exactly one document version and never updated.
   }, [])

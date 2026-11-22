@@ -1,7 +1,7 @@
 // The only bridge between the sandboxed renderer and the main process.
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { CompileProgressEvent, ProjectChangedEvent, UnderleafApi } from '@shared/api'
+import type { CompileProgressEvent, HistoryChangedEvent, ProjectChangedEvent, UnderleafApi } from '@shared/api'
 import { CHANNELS, EVENTS, type ChannelNamespace, type IpcReply } from '@shared/channels'
 
 function call(channel: string) {
@@ -55,6 +55,11 @@ const api = {
     ...namespace('compile'),
     onProgress: (cb: (event: CompileProgressEvent) => void) =>
       subscribe<CompileProgressEvent>(EVENTS.compileProgress, cb)
+  },
+  history: {
+    ...namespace('history'),
+    onChanged: (cb: (event: HistoryChangedEvent) => void) =>
+      subscribe<HistoryChangedEvent>(EVENTS.historyChanged, cb)
   }
 } as unknown as UnderleafApi
 

@@ -3,10 +3,12 @@ import {
   mdiClose,
   mdiCog,
   mdiContentCopy,
+  mdiContentSaveOutline,
   mdiCounter,
   mdiFilePdfBox,
   mdiFolderOpenOutline,
   mdiFolderZipOutline,
+  mdiHistory,
   mdiKeyboardOutline,
   mdiOpenInNew
 } from '@mdi/js'
@@ -136,6 +138,13 @@ const HOTKEYS: Array<{ group: string; keys: Array<[string, string]> }> = [
       ['Double-click in PDF', 'Jump to the source'],
       [`${MOD} + scroll in PDF`, 'Zoom the PDF']
     ]
+  },
+  {
+    group: 'Versions',
+    keys: [
+      [`${MOD} + Shift + S`, 'Save a version under a name'],
+      [`${MOD} + Shift + H`, 'Show or leave the history']
+    ]
   }
 ]
 
@@ -175,6 +184,8 @@ interface MenuDrawerProps {
   onShowHotkeys: () => void
   onShowWordCount: () => void
   onShowEngineSettings: () => void
+  onShowHistory: () => void
+  onSaveVersion: () => void
 }
 
 /** The left-hand "Menu": downloads, project actions and settings. */
@@ -233,6 +244,30 @@ export function MenuDrawer(props: MenuDrawerProps): React.JSX.Element {
           <p className="drawer-hint">
             The source .zip can be uploaded to Overleaf with <em>New Project → Upload Project</em>.
           </p>
+
+          <h4>Versions</h4>
+          <button
+            type="button"
+            className="drawer-link"
+            onClick={() => {
+              props.onClose()
+              props.onSaveVersion()
+            }}
+          >
+            <Icon path={mdiContentSaveOutline} />
+            Save Version…
+          </button>
+          <button
+            type="button"
+            className="drawer-link"
+            onClick={() => {
+              props.onClose()
+              props.onShowHistory()
+            }}
+          >
+            <Icon path={mdiHistory} />
+            History
+          </button>
 
           <h4>Actions</h4>
           <button type="button" className="drawer-link" onClick={() => setCopying(true)}>

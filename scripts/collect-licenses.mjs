@@ -66,6 +66,46 @@ function licenceName(pkg) {
   return ''
 }
 
+const MIT_TERMS = `Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`
+
+function authorOf(pkg) {
+  const a = pkg.author
+  const name = typeof a === 'string' ? a.replace(/\s*[<(].*$/, '') : (a?.name ?? '')
+  return name.trim()
+}
+
+/**
+ * Some packages name their licence in package.json but do not ship its text.
+ * For the licences below the text is the same for everybody, so it is given
+ * here together with the author the package names. Null for anything else,
+ * which then needs a person to look at it.
+ */
+function standardLicence(pkg) {
+  const id = licenceName(pkg).trim().toLowerCase()
+  const who = authorOf(pkg) || `the authors of ${pkg.name}`
+  if (id === 'mit') return `MIT License\n\nCopyright (c) ${who}\n\n${MIT_TERMS}`
+  if (id === 'apache-2.0') {
+    return `Copyright ${who}\n\nLicensed under the Apache License, Version 2.0, the text of which follows.\n\n${readText(path.join(root, 'LICENSE'))}`
+  }
+  return null
+}
+
 function homepage(pkg) {
   const repo = typeof pkg.repository === 'string' ? pkg.repository : pkg.repository?.url
   const url = pkg.homepage || repo || ''
@@ -90,12 +130,15 @@ export function bundledPackages() {
     }
     if (byDir.has(dir)) continue
     const pkg = readJson(path.join(dir, 'package.json'))
+    const texts = licenceFiles(dir).map((file) => ({ file, text: readText(path.join(dir, file)) }))
     byDir.set(dir, {
       name: pkg.name ?? name,
       version: pkg.version ?? '',
       license: licenceName(pkg),
       url: homepage(pkg),
-      texts: licenceFiles(dir).map((file) => ({ file, text: readText(path.join(dir, file)) }))
+      texts,
+      // Only for a package that brings no licence file of its own.
+      standard: texts.length === 0 ? standardLicence(pkg) : null
     })
     for (const dep of Object.keys(pkg.dependencies ?? {})) queue.push({ name: dep, from: dir, required: true })
     // A peer that the package cannot work without is installed alongside it;
@@ -139,9 +182,12 @@ function tectonicVersion() {
 
 export function render() {
   const packages = bundledPackages()
-  const missing = packages.filter((p) => p.texts.length === 0 && !p.license)
+  const missing = packages.filter((p) => p.texts.length === 0 && !p.standard)
   if (missing.length > 0) {
-    throw new Error(`No licence information found for: ${missing.map((p) => `${p.name}@${p.version}`).join(', ')}`)
+    throw new Error(
+      `No licence text for: ${missing.map((p) => `${p.name}@${p.version} (${p.license || 'no licence named'})`).join(', ')}. ` +
+        'These packages ship without a licence file and name a licence whose text this script does not know; have a look and add it.'
+    )
   }
   const resources = pdfjsResources()
   const tectonic = tectonicVersion()
@@ -186,8 +232,14 @@ export function render() {
     if (p.license) lines.push(`Licence: ${p.license}`)
     if (p.url) lines.push(p.url)
     lines.push(RULE, '')
-    if (p.texts.length === 0) {
-      lines.push(`(The package contains no licence file; its package.json declares "${p.license}".)`, '')
+    if (p.standard) {
+      lines.push(
+        `(The package contains no licence file. Its package.json names the licence "${p.license}";`,
+        'the standard text of that licence follows, with the author the package names.)',
+        '',
+        p.standard,
+        ''
+      )
     }
     for (const { file, text } of p.texts) {
       if (p.texts.length > 1) lines.push(`[${file}]`, '')
@@ -216,9 +268,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const { text, packages, resources } = render()
   fs.mkdirSync(path.dirname(out), { recursive: true })
   fs.writeFileSync(out, text, 'utf8')
-  const bare = packages.filter((p) => p.texts.length === 0).map((p) => p.name)
+  const bare = packages.filter((p) => p.standard).map((p) => p.name)
   console.log(
     `Licences of ${packages.length} packages and ${resources.length} PDF.js resource files written to ${path.relative(root, out) || out}` +
-      (bare.length > 0 ? ` (without a licence file: ${bare.join(', ')})` : '')
+      (bare.length > 0 ? ` (standard text used for packages without a licence file: ${bare.join(', ')})` : '')
   )
 }

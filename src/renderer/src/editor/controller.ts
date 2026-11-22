@@ -63,6 +63,14 @@ export interface EditorEvents {
 const LATEX_EXTS = new Set(['tex', 'ltx', 'latex', 'sty', 'cls', 'def', 'clo', 'tikz', 'pgf', 'dtx', 'bbl', 'ldf', 'cfg'])
 const BIB_EXTS = new Set(['bib', 'bst', 'bbx', 'cbx'])
 
+/** The syntax highlighting that goes with a file, judged by its name. */
+export function languageFor(path: string): Extension {
+  const ext = extensionOf(path)
+  if (LATEX_EXTS.has(ext)) return latexLanguage
+  if (BIB_EXTS.has(ext)) return bibtexLanguage
+  return []
+}
+
 const SAVE_DELAY_MS = 450
 /** After a failed save, try again this often for as long as the changes are unsaved. */
 const SAVE_RETRY_MS = 4000
@@ -140,10 +148,7 @@ class EditorController {
   }
 
   private language(path: string): Extension {
-    const ext = extensionOf(path)
-    if (LATEX_EXTS.has(ext)) return latexLanguage
-    if (BIB_EXTS.has(ext)) return bibtexLanguage
-    return []
+    return languageFor(path)
   }
 
   private themeExtension(): Extension {

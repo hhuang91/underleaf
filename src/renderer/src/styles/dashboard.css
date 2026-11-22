@@ -446,3 +446,41 @@
 .engine-status .missing .icon {
   color: var(--yellow-40);
 }
+
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-numbers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
+.settings-numbers .field {
+  margin-bottom: 8px;
+}
+
+.settings-numbers .field > label {
+  font-weight: 400;
+  font-size: 13px;
+}
+
+.settings-number {
+  width: 110px;
+}
+
+.settings-number:disabled {
+  background: var(--neutral-10);
+  color: var(--neutral-50);
+}
+
+.settings-section > .hint {
+  font-size: 12px;
+  color: var(--neutral-60);
+}

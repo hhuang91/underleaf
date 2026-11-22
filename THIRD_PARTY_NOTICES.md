@@ -15,7 +15,8 @@ installed with the app and opens from **Help → Open-Source Licenses**.
 | [Tectonic](https://tectonic-typesetting.github.io/) | Built-in TeX engine (bundled program) | MIT, with parts under other licences including the GNU GPL (see below) |
 | [PDF.js](https://mozilla.github.io/pdf.js/) | PDF preview | Apache-2.0 |
 | Resources shipped with PDF.js | Character maps, stand-ins for the standard PDF fonts, image and colour decoders | BSD-style, Apache-2.0, MIT and CC0 licences; the Liberation Sans fonts are under the GNU GPL v2 with a font exception |
-| [CodeMirror 6](https://codemirror.net/) and [Lezer](https://lezer.codemirror.net/) | Source editor | MIT |
+| [CodeMirror 6](https://codemirror.net/) and [Lezer](https://lezer.codemirror.net/) | Source editor, comparison of versions | MIT |
+| [isomorphic-git](https://isomorphic-git.org/), [ignore](https://github.com/kaelzhang/node-ignore) | Version history (reading and writing the git repository of a project, and git's rules for which files to leave out) | MIT |
 | [@replit/codemirror-vim](https://github.com/replit/codemirror-vim), [@replit/codemirror-emacs](https://github.com/replit/codemirror-emacs) | Optional key bindings | MIT |
 | [React](https://react.dev/) | User interface | MIT |
 | [Zustand](https://github.com/pmndrs/zustand) | State management | MIT |

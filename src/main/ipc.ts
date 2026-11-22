@@ -6,9 +6,10 @@ import path from 'node:path'
 import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import type { UnderleafApi } from '@shared/api'
 import { CHANNELS, EVENTS, type ChannelNamespace, type IpcReply } from '@shared/channels'
-import type { AppSettings, Compiler, DeepPartial } from '@shared/types'
+import type { AppSettings, Compiler, DeepPartial, VersionRef } from '@shared/types'
 import type { ProjectAnalyzer } from './analysis'
 import { isLatexmkRc, rcFingerprint, type CompileManager } from './compile'
+import type { HistoryManager } from './history'
 import {
   createFile,
   createFolder,
@@ -38,6 +39,7 @@ export interface IpcContext {
   compiler: CompileManager
   analyzer: ProjectAnalyzer
   watcher: ProjectWatcher
+  history: HistoryManager
   window(): BrowserWindow | null
   /** Origins that are allowed to call the API (the app itself, plus the dev server). */
   trustedOrigins: string[]
@@ -47,7 +49,7 @@ export interface IpcContext {
 const COMPILERS: ReadonlySet<string> = new Set(['pdflatex', 'latex', 'xelatex', 'lualatex'])
 
 export function registerIpc(ctx: IpcContext): void {
-  const { settings, library, compiler, analyzer, watcher } = ctx
+  const { settings, library, compiler, analyzer, watcher, history } = ctx
   /** Folders the user picked in a native dialog during this session. */
   const chosenDirs = new Set<string>()
   /** Files this app wrote for the user (exports); they may be revealed in the file manager. */
@@ -119,7 +121,12 @@ export function registerIpc(ctx: IpcContext): void {
 
   const watch = (dir: string): void => {
     const id = encodeProjectId(dir)
-    watcher.start(dir, (paths) => send(EVENTS.projectChanged, { id, paths }))
+    watcher.start(dir, (paths) => {
+      send(EVENTS.projectChanged, { id, paths })
+      // Whatever changed the files (this app, another editor, git): it is
+      // what the automatic versions count as editing.
+      history.noteActivity(dir)
+    })
   }
 
   /** Stops whatever keeps the project folder busy; resolves with whether it was being watched. */
@@ -128,7 +135,14 @@ export function registerIpc(ctx: IpcContext): void {
     watcher.stop(dir)
     compiler.stop(dir)
     await compiler.whenIdle(dir)
+    await history.whenIdle(dir)
     return wasWatched
+  }
+
+  const versionRef = <N extends boolean>(value: unknown, orNothing: N): VersionRef | (N extends true ? null : never) => {
+    if (value === null && orNothing) return null as N extends true ? null : never
+    if (value === 'current' || (typeof value === 'string' && /^[0-9a-f]{40}$/.test(value))) return value
+    throw new Error('Unknown version')
   }
 
   // The project's latexmkrc is only used with the user's consent (it is code).
@@ -253,6 +267,7 @@ export function registerIpc(ctx: IpcContext): void {
       }
       // Carry what is remembered about the folder over to its new name. The
       // window that has it open follows with `open`, which starts watching it.
+      await history.moved(from, summary.path)
       const { lastOpenFile, trustedRc } = settings.get()
       if (lastOpenFile[from]) await settings.update({ lastOpenFile: { [summary.path]: lastOpenFile[from], [from]: '' } })
       if (trustedRc[from]) await settings.update({ trustedRc: { [summary.path]: trustedRc[from], [from]: '' } })
@@ -269,6 +284,7 @@ export function registerIpc(ctx: IpcContext): void {
         if (wasWatched) watch(dir)
         throw err
       }
+      history.forget(dir)
       await compiler.clearCache(dir).catch(() => undefined)
     },
     reveal: async (id) => {
@@ -281,8 +297,12 @@ export function registerIpc(ctx: IpcContext): void {
       if (!(await isDirectory(dir))) throw new Error('The project folder no longer exists')
       const [tree, root] = await Promise.all([readTree(dir), library.effectiveRootDoc(dir)])
       const projectCompiler = await library.effectiveCompiler(dir, root.rootDoc)
+      // A project that is opened (as opposed to one that was renamed while
+      // open) gets a version of how it was found, unless it has not changed.
+      const fresh = !library.isOpen(dir)
       library.markOpen(dir)
       watch(dir)
+      if (fresh) void history.saveAuto(dir, 'open').catch(() => undefined)
       const last = settings.get().lastOpenFile[dir] ?? null
       return {
         summary: await library.summary(dir),
@@ -297,6 +317,8 @@ export function registerIpc(ctx: IpcContext): void {
       const dir = library.dirFor(id)
       watcher.stop(dir)
       library.markClosed(dir)
+      // What was changed since the last version is kept as one.
+      await history.flush(dir)
     },
     setCompiler: async (id, value) => {
       if (!COMPILERS.has(value)) throw new Error('Unknown compiler')
@@ -428,6 +450,24 @@ export function registerIpc(ctx: IpcContext): void {
     syncToSource: async (id, page, x, y) => {
       if (![page, x, y].every((n) => Number.isFinite(n))) return null
       return compiler.syncToSource(library.dirFor(id), Math.round(page), x, y)
+    }
+  })
+
+  // --------------------------------------------------------- history
+
+  register('history', {
+    list: async (id, limit) => history.list(library.dirFor(id), Number.isFinite(limit) ? limit : 200),
+    save: async (id, label) => history.saveNamed(library.dirFor(id), typeof label === 'string' ? label : ''),
+    changes: async (id, from, to) => history.changes(library.dirFor(id), versionRef(from, true), versionRef(to, false)),
+    file: async (id, from, to, rel) => {
+      if (typeof rel !== 'string') throw new Error('Invalid path')
+      return history.file(library.dirFor(id), versionRef(from, true), versionRef(to, false), rel)
+    },
+    restore: async (id, version, rel) => {
+      if (rel !== null && typeof rel !== 'string') throw new Error('Invalid path')
+      const ref = versionRef(version, false)
+      if (ref === 'current') throw new Error('Unknown version')
+      return history.restore(library.dirFor(id), ref, rel)
     }
   })
 }

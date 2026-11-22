@@ -33,6 +33,13 @@ export interface LibraryDeps {
   setExternalProjects(list: string[]): Promise<void>
   /** Moves a file or folder to the OS recycle bin / trash. */
   trash(target: string): Promise<void>
+  /**
+   * Called before and after an archive replaces the files of an existing
+   * project (the version history keeps both states). A failure here does not
+   * stop the import.
+   */
+  beforeReplace?(dir: string, archive: string): Promise<unknown>
+  afterReplace?(dir: string, archive: string): Promise<unknown>
 }
 
 const VALID_COMPILERS: ReadonlySet<string> = new Set(['pdflatex', 'latex', 'xelatex', 'lualatex'])
@@ -194,6 +201,10 @@ export class ProjectLibrary {
   }
 
   /** Call when a window opens the project (after `dirFor` accepted it) and when it lets go of it. */
+  isOpen(dir: string): boolean {
+    return [...this.opened].some((p) => samePath(p, dir))
+  }
+
   markOpen(dir: string): void {
     this.opened.add(path.resolve(dir))
   }
@@ -413,7 +424,10 @@ export class ProjectLibrary {
       const content = await this.contentRoot(staging)
 
       if (existing && mode === 'replace') {
+        const archive = path.basename(zipPath)
+        await this.deps.beforeReplace?.(existing, archive)?.catch(() => undefined)
         await this.replaceContents(existing, content)
+        await this.deps.afterReplace?.(existing, archive)?.catch(() => undefined)
         return { status: 'imported', project: await this.summary(existing), replaced: true }
       }
 

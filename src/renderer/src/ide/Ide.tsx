@@ -4,6 +4,7 @@ import {
   mdiCheck,
   mdiChevronDown,
   mdiFolderOpenOutline,
+  mdiHistory,
   mdiHomeOutline,
   mdiLoading,
   mdiMenu,
@@ -20,14 +21,16 @@ import { editor } from '../editor/controller'
 import { deferMenuCommand, useMenuCommands } from '../lib/menuBus'
 import { cx, errorMessage, isMac } from '../lib/util'
 import { notifyError, useApp, useSettings } from '../stores/app'
+import { useHistory } from '../stores/history'
 import { useIde } from '../stores/ide'
 import { EditorPane } from './EditorPane'
 import { FileTree } from './FileTree'
+import { HistoryView, SaveVersionModal } from './HistoryView'
 import { HotkeysModal, MenuDrawer, WordCountModal } from './MenuDrawer'
 import { Outline } from './Outline'
 import { PdfPane } from './PdfPane'
 
-type IdeModal = 'hotkeys' | 'word-count' | 'settings' | 'unsaved' | null
+type IdeModal = 'hotkeys' | 'word-count' | 'settings' | 'unsaved' | 'save-version' | null
 
 function ProjectName(): React.JSX.Element {
   const name = useIde((s) => s.summary?.name ?? '')
@@ -107,6 +110,7 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
   const notify = useApp((s) => s.notify)
   const loading = useIde((s) => s.loading)
   const loadError = useIde((s) => s.loadError)
+  const historyOpen = useHistory((s) => s.open)
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [modal, setModal] = useState<IdeModal>(null)
@@ -125,6 +129,7 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
 
   useEffect(
     () => () => {
+      useHistory.getState().reset()
       void useIde.getState().unload()
     },
     []
@@ -139,10 +144,25 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
         useIde.setState(event.sticky ? { progressNote: event.line, progress: '' } : { progress: event.line })
       }
     })
+    // A version that is saved while the History screen is open shows up in it.
+    const offHistory = window.api.history.onChanged((event) => {
+      if (event.id === useIde.getState().projectId && useHistory.getState().open) void useHistory.getState().refresh()
+    })
     return () => {
       offChanged()
       offProgress()
+      offHistory()
     }
+  }, [])
+
+  // The editor was out of sight behind the History screen: let it measure itself again.
+  useEffect(() => {
+    if (!historyOpen) editor.refreshLayout()
+  }, [historyOpen])
+
+  const toggleHistory = useCallback((): void => {
+    if (useHistory.getState().open) useHistory.getState().hide()
+    else void useHistory.getState().show()
   }, [])
 
   /** Back to the project list; `thenRun` is a menu command for it to carry out. */
@@ -216,6 +236,12 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
       case 'settings':
         setModal('settings')
         break
+      case 'history':
+        toggleHistory()
+        break
+      case 'save-version':
+        setModal('save-version')
+        break
       case 'new-project':
       case 'upload-project':
       case 'open-folder':
@@ -230,7 +256,8 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
     const onKey = (e: KeyboardEvent): void => {
       if (e.defaultPrevented) return
       const mod = isMac ? e.metaKey : e.ctrlKey
-      if (mod && !e.altKey && (e.key === 'Enter' || e.key.toLowerCase() === 's')) {
+      // Not with Shift: that is "Save Version…" in the File menu.
+      if (mod && !e.altKey && !e.shiftKey && (e.key === 'Enter' || e.key.toLowerCase() === 's')) {
         e.preventDefault()
         void useIde.getState().compile()
       }
@@ -269,6 +296,16 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
         <div className="ide-toolbar-group right">
           <button
             type="button"
+            className={cx('toolbar-btn', historyOpen && 'active')}
+            onClick={toggleHistory}
+            title="The versions of this project: compare them, or go back to one"
+            aria-pressed={historyOpen}
+          >
+            <Icon path={mdiHistory} size={18} />
+            History
+          </button>
+          <button
+            type="button"
             className="toolbar-btn"
             onClick={() => void window.api.projects.reveal(projectId)}
             title={isMac ? 'Reveal the project folder in Finder' : 'Open the project folder'}
@@ -297,7 +334,8 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
           </button>
         </div>
       ) : (
-        <div className="ide-main">
+        // The editor stays as it is behind the History screen, only out of sight.
+        <div className="ide-main" style={{ display: historyOpen ? 'none' : undefined }}>
           <aside className="ide-side" style={{ width: treeWidth }}>
             <FileTree />
             <Outline />
@@ -346,6 +384,8 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
         </div>
       )}
 
+      {historyOpen && !loadError && <HistoryView />}
+
       {menuOpen && (
         <MenuDrawer
           onClose={() => setMenuOpen(false)}
@@ -354,8 +394,11 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
           onShowHotkeys={() => setModal('hotkeys')}
           onShowWordCount={() => setModal('word-count')}
           onShowEngineSettings={() => setModal('settings')}
+          onShowHistory={() => void useHistory.getState().show()}
+          onSaveVersion={() => setModal('save-version')}
         />
       )}
+      {modal === 'save-version' && <SaveVersionModal onClose={() => setModal(null)} />}
       {modal === 'hotkeys' && <HotkeysModal onClose={() => setModal(null)} />}
       {modal === 'word-count' && <WordCountModal onClose={() => setModal(null)} />}
       {modal === 'settings' && <SettingsModal insideProject onClose={() => setModal(null)} />}

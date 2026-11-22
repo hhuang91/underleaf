@@ -5,6 +5,7 @@ import type {
   CompileResult,
   DeepPartial,
   FileNode,
+  HistoryList,
   ImportFilesResult,
   ImportResult,
   PdfRect,
@@ -12,8 +13,13 @@ import type {
   ProjectState,
   ProjectSummary,
   ReadFileResult,
+  RestoreResult,
   SourceLocation,
   TexStatus,
+  VersionChange,
+  VersionFile,
+  VersionInfo,
+  VersionRef,
   WordCount
 } from './types'
 
@@ -31,6 +37,11 @@ export interface CompileProgressEvent {
   line: string
   /** A status notice from the app itself; stays visible until the compile ends. */
   sticky: boolean
+}
+
+/** A version was added to the project's history. */
+export interface HistoryChangedEvent {
+  id: string
 }
 
 /** The API exposed to the renderer as `window.api`. */
@@ -117,5 +128,22 @@ export interface UnderleafApi {
     syncToPdf(id: string, file: string, line: number, column: number): Promise<PdfRect[]>
     syncToSource(id: string, page: number, x: number, y: number): Promise<SourceLocation | null>
     onProgress(cb: (event: CompileProgressEvent) => void): () => void
+  }
+  history: {
+    /** The project's versions, newest first, at most `limit` of them. */
+    list(id: string, limit: number): Promise<HistoryList>
+    /** Saves the project as it is on disk under a name. */
+    save(id: string, label: string): Promise<VersionInfo>
+    /** The files that differ between two states; `from` null stands for an empty project. */
+    changes(id: string, from: VersionRef | null, to: VersionRef): Promise<VersionChange[]>
+    /** One file in both states. */
+    file(id: string, from: VersionRef | null, to: VersionRef, path: string): Promise<VersionFile>
+    /**
+     * Puts one file, or with `path` null the whole project, back the way it was
+     * in a version. The state it replaces is saved as a version first. Resolves
+     * with the files that were left as they are, and why.
+     */
+    restore(id: string, version: string, path: string | null): Promise<RestoreResult>
+    onChanged(cb: (event: HistoryChangedEvent) => void): () => void
   }
 }

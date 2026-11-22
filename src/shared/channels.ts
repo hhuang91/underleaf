@@ -54,7 +54,8 @@ export const CHANNELS = {
     'openBuildFolder',
     'syncToPdf',
     'syncToSource'
-  ]
+  ],
+  history: ['list', 'save', 'changes', 'file', 'restore']
 } as const
 
 export type ChannelNamespace = keyof typeof CHANNELS
@@ -63,6 +64,7 @@ export type ChannelNamespace = keyof typeof CHANNELS
 export const EVENTS = {
   projectChanged: 'event:project-changed',
   compileProgress: 'event:compile-progress',
+  historyChanged: 'event:history-changed',
   menuCommand: 'event:menu-command',
   flushRequest: 'event:flush-request',
   flushDone: 'event:flush-done',

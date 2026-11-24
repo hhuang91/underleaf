@@ -55,7 +55,8 @@ export const CHANNELS = {
     'syncToPdf',
     'syncToSource'
   ],
-  history: ['list', 'save', 'changes', 'file', 'restore']
+  history: ['list', 'save', 'changes', 'file', 'restore'],
+  assistant: ['models', 'detect', 'check', 'complete', 'proofread', 'cancel', 'setKey', 'keyStatus']
 } as const
 
 export type ChannelNamespace = keyof typeof CHANNELS
@@ -65,6 +66,8 @@ export const EVENTS = {
   projectChanged: 'event:project-changed',
   compileProgress: 'event:compile-progress',
   historyChanged: 'event:history-changed',
+  /** The answer so far of a proofreading request. */
+  assistantProgress: 'event:assistant-progress',
   menuCommand: 'event:menu-command',
   flushRequest: 'event:flush-request',
   flushDone: 'event:flush-done',

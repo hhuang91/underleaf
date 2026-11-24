@@ -13,6 +13,8 @@ import {
 } from 'electron'
 import { EVENTS } from '@shared/channels'
 import { ProjectAnalyzer } from './analysis'
+import { ApiKeyStore } from './apiKey'
+import { AssistantClient, type Probe } from './assistant'
 import { CompileManager } from './compile'
 import { HistoryManager } from './history'
 import { registerIpc } from './ipc'
@@ -45,6 +47,7 @@ let settings: SettingsStore
 const watcher = new ProjectWatcher()
 let compiler: CompileManager
 let history: HistoryManager | null = null
+let assistant: AssistantClient | null = null
 
 // ---------------------------------------------------------------- paths
 
@@ -270,6 +273,10 @@ function attachContextMenu(win: BrowserWindow): void {
         { type: 'separator' },
         { role: 'selectAll' }
       )
+      // The window only acts on it when the selection is in the editor.
+      if (settings.get().assistant.enabled && params.selectionText.trim()) {
+        items.push({ type: 'separator' }, { label: 'Proofread Selection', click: () => sendMenuCommand('proofread') })
+      }
     } else if (params.selectionText.trim()) {
       items.push({ role: 'copy' })
     }
@@ -388,6 +395,7 @@ function createWindow(): void {
     // On macOS the app lives on without its window; nothing may keep running for it.
     compiler?.stopAll()
     watcher.stopAll()
+    assistant?.cancelAll()
   })
 
   if (DEV_URL) void win.loadURL(DEV_URL)
@@ -461,6 +469,20 @@ async function bootstrap(): Promise<void> {
     }
   })
 
+  // The writing assistant. Tests point the search for servers on this
+  // computer at a stand-in: UNDERLEAF_ASSISTANT_PROBES="Name=port,...".
+  const apiKeys = new ApiKeyStore(path.join(app.getPath('userData'), 'assistant-key.json'))
+  const probes: Probe[] | undefined = process.env['UNDERLEAF_ASSISTANT_PROBES']
+    ?.split(',')
+    .map((entry) => entry.split('='))
+    .filter(([name, port]) => name && /^\d+$/.test(port ?? ''))
+    .map(([name, port]) => ({ name, port: Number(port) }))
+  assistant = new AssistantClient({
+    settings: () => settings.get().assistant,
+    apiKey: (origin) => apiKeys.keyFor(origin),
+    probes
+  })
+
   registerIpc({
     settings,
     library,
@@ -468,6 +490,8 @@ async function bootstrap(): Promise<void> {
     analyzer: new ProjectAnalyzer(),
     watcher,
     history: versions,
+    assistant,
+    apiKeys,
     window: () => mainWindow,
     trustedOrigins: DEV_URL ? [`${APP_ORIGIN}/`, DEV_URL] : [`${APP_ORIGIN}/`],
     trash

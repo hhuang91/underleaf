@@ -31,9 +31,10 @@ import {
   rectangularSelection,
   type ViewUpdate
 } from '@codemirror/view'
-import type { EditorSettings, Keybindings, LogEntry } from '@shared/types'
+import type { AssistantSettings, EditorSettings, Keybindings, LogEntry } from '@shared/types'
 import { extensionOf } from '@shared/fileTypes'
 import { errorMessage } from '../lib/util'
+import { assistantExtension, proofreadRange, type AssistantStatus } from './assistant'
 import { latexCompletionSource } from './completions'
 import {
   applyLogEntries,
@@ -84,6 +85,7 @@ const completeC = new Compartment()
 const spellC = new Compartment()
 const lintC = new Compartment()
 const readOnlyC = new Compartment()
+const assistantC = new Compartment()
 
 // A document that must not be edited: nothing changes it, whoever asks.
 const READ_ONLY: Extension = [EditorState.readOnly.of(true), EditorState.changeFilter.of(() => false)]
@@ -107,6 +109,15 @@ const DEFAULT_SETTINGS: EditorSettings = {
   spellCheck: true
 }
 
+const ASSISTANT_OFF: AssistantSettings = { enabled: false, url: '', model: '', inline: 'off' }
+
+/** What the writing assistant needs from the rest of the app. */
+export interface AssistantHooks {
+  status(status: AssistantStatus): void
+  /** Proofread the selection (Ctrl/Cmd+Shift+P). */
+  proofread(): void
+}
+
 class EditorController {
   private view: EditorView | null = null
   private meta: DocMeta | null = null
@@ -125,6 +136,7 @@ class EditorController {
   private outlineTimer: number | null = null
   private writeChain: Promise<void> = Promise.resolve()
   private settings: EditorSettings = DEFAULT_SETTINGS
+  private assistant: AssistantSettings = ASSISTANT_OFF
   private keyExtension: Extension = []
   private loadedKeys: Keybindings = 'default'
   private entries: LogEntry[] = []
@@ -139,6 +151,11 @@ class EditorController {
     onCursor: () => undefined,
     onOutline: () => undefined,
     onRecompile: () => undefined
+  }
+
+  assistantHooks: AssistantHooks = {
+    status: () => undefined,
+    proofread: () => undefined
   }
 
   // ---------------------------------------------------------- extensions
@@ -170,6 +187,19 @@ class EditorController {
     return this.settings.codeCheck && extensionOf(path) === 'tex' ? latexLinter : []
   }
 
+  /** Suggestions and proofreading, while the assistant is on (never for a write-protected file). */
+  private assistantExtension(readOnly: boolean): Extension {
+    if (!this.assistant.enabled || readOnly) return []
+    return assistantExtension({
+      inline: this.assistant.inline,
+      path: () => this.meta?.path ?? '',
+      ask: (request) => window.api.assistant.complete(request),
+      cancel: (id) => void window.api.assistant.cancel(id).catch(() => undefined),
+      status: (status) => this.assistantHooks.status(status),
+      proofread: () => this.assistantHooks.proofread()
+    })
+  }
+
   private extensions(path: string, readOnly: boolean): Extension[] {
     return [
       keysC.of(this.keyExtension), // Vim/Emacs must see keys before everything else
@@ -199,6 +229,7 @@ class EditorController {
       completeC.of(this.completion(path)),
       spellC.of(this.settings.spellCheck ? spellCheck : noSpellCheck),
       lintC.of(this.lint(path)),
+      assistantC.of(this.assistantExtension(readOnly)),
       this.isLatex(path) ? latexEnterKeymap : [],
       keymap.of([
         { key: 'Mod-Enter', run: () => this.recompile() },
@@ -396,7 +427,7 @@ class EditorController {
     const meta = this.meta
     if (!meta || !meta.readOnly) return
     meta.readOnly = false
-    this.view?.dispatch({ effects: readOnlyC.reconfigure([]) })
+    this.view?.dispatch({ effects: [readOnlyC.reconfigure([]), assistantC.reconfigure(this.assistantExtension(false))] })
     meta.dirty = true
     this.revisionCounter++
     this.events.onDirty()
@@ -619,6 +650,54 @@ class EditorController {
     }
     if (previous.codeCheck !== settings.codeCheck) effects.push(lintC.reconfigure(this.lint(path)))
     if (effects.length > 0) this.view.dispatch({ effects })
+  }
+
+  configureAssistant(settings: AssistantSettings): void {
+    const previous = this.assistant
+    this.assistant = settings
+    if (previous.enabled === settings.enabled && previous.inline === settings.inline) return
+    if (this.view && this.meta) {
+      this.view.dispatch({ effects: assistantC.reconfigure(this.assistantExtension(this.meta.readOnly)) })
+    }
+  }
+
+  /** True while the keyboard is in the editor. */
+  get hasFocus(): boolean {
+    return this.view?.hasFocus ?? false
+  }
+
+  /** What to proofread: the selection, or the paragraph that the cursor is in. */
+  proofreadTarget(): { path: string; from: number; to: number; text: string } | null {
+    const view = this.view
+    if (!view || !this.meta || this.meta.readOnly) return null
+    const range = proofreadRange(view.state)
+    if (!range) return null
+    return { path: this.meta.path, ...range, text: view.state.sliceDoc(range.from, range.to) }
+  }
+
+  /**
+   * Puts the corrected passage in place of the one that was proofread, as one
+   * step that can be undone. The passage may have moved in the meantime (an
+   * edit above it, made elsewhere); it is looked for, and nothing is replaced
+   * when it is no longer there exactly once.
+   */
+  replacePassage(path: string, from: number, to: number, original: string, text: string): boolean {
+    const view = this.view
+    if (!view || this.meta?.path !== path || this.meta.readOnly) return false
+    let start = from
+    if (view.state.sliceDoc(from, to) !== original) {
+      const doc = view.state.doc.toString()
+      start = doc.indexOf(original)
+      if (start < 0 || doc.indexOf(original, start + 1) >= 0) return false
+    }
+    view.dispatch({
+      changes: { from: start, to: start + original.length, insert: text },
+      selection: { anchor: start + text.length },
+      scrollIntoView: true,
+      userEvent: 'input.proofread'
+    })
+    view.focus()
+    return true
   }
 
   /** Vim and Emacs emulation are loaded on demand; most people never need them. */

@@ -17,6 +17,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { _electron as electron } from 'playwright'
+import { startFakeLlm } from '../fixtures/fake-llm.mjs'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const run = process.env.UNDERLEAF_E2E_RUN ?? ''
@@ -43,6 +44,11 @@ if (!realEngine) env.UNDERLEAF_TECTONIC = path.join(root, 'tests', 'fixtures', '
 const trashDir = process.env.UNDERLEAF_E2E_REAL_TRASH === '1' ? null : path.join(tmp, 'trash')
 if (trashDir) env.UNDERLEAF_TRASH_DIR = trashDir
 delete env.ELECTRON_RUN_AS_NODE
+// A stand-in for a model server (tests/fixtures/fake-llm.mjs). The app looks
+// for servers on this computer only there, not at the usual ports, where a
+// real one may be running.
+const llm = await startFakeLlm()
+env.UNDERLEAF_ASSISTANT_PROBES = `Test server=${llm.port}`
 
 // UNDERLEAF_E2E_APP=<path to a packaged executable> tests a packaged build
 // (for example dist/win-unpacked/Underleaf.exe) instead of the working tree.
@@ -487,6 +493,168 @@ try {
   await win.waitForFunction(() => !document.querySelector('.cm-fat-cursor'))
   await waitForSaved(win)
 
+  // ---------------------------------------------------- writing assistant
+  // Off until it is turned on: nothing has been sent to any server so far.
+  assert.equal(llm.requests.length, 0, 'no request before the assistant is turned on')
+  assert.equal(await win.locator('.assistant-btn').count(), 0)
+  await win.click('.toolbar-btn >> text=Menu')
+  await win.click('.menu-row:has-text("Writing assistant") button')
+  await win.waitForSelector('.assistant-settings')
+  // Turned on with no address yet, it looks for a server on this computer and
+  // takes the first one with a model (embedding models are not offered).
+  await win.click('.assistant-settings .settings-toggle')
+  await win.waitForFunction((url) => document.querySelector('#assistant-url')?.value === url, llm.url)
+  await win.waitForFunction(() => document.querySelector('#assistant-model')?.value === 'fake-writer')
+  assert.match(await win.locator('.assistant-found').innerText(), /Test server/)
+  await win.click('.assistant-settings button:has-text("Test the connection")')
+  await win.waitForSelector('.assistant-check.ok')
+  assert.match(await win.locator('.assistant-check').innerText(), /fake-writer answered in/)
+  // A server that wants an API key gets it; the key is not kept with the settings.
+  llm.state.key = 'e2e-secret-key'
+  await win.fill('#assistant-key', 'e2e-secret-key')
+  await win.keyboard.press('Enter')
+  await win.waitForSelector('.assistant-key-remove')
+  await win.click('.assistant-settings button:has-text("Test the connection")')
+  await win.waitForSelector('.assistant-check.ok')
+  assert.equal(llm.requests.at(-1).headers.authorization, 'Bearer e2e-secret-key')
+  // The key belongs to that server: with another address (here the same
+  // server under another name) it is not sent.
+  await win.fill('#assistant-url', `http://localhost:${llm.port}/v1`)
+  await win.keyboard.press('Enter')
+  await win.waitForSelector('text=It is not sent to this server.')
+  await win.click('.assistant-settings button:has-text("Test the connection")')
+  await win.waitForSelector('.assistant-check.failed')
+  assert.equal(
+    llm.requests.filter((r) => r.headers.host?.startsWith('localhost') && r.headers.authorization).length,
+    0,
+    'the key is not sent to another address'
+  )
+  await win.fill('#assistant-url', llm.url)
+  await win.keyboard.press('Enter')
+  await win.waitForFunction(() => !document.body.textContent?.includes('It is not sent to this server.'))
+  await win.click('.assistant-settings button:has-text("Test the connection")')
+  await win.waitForSelector('.assistant-check.ok')
+  const userData = path.join(tmp, 'user-data')
+  await until(async () => (await fs.readFile(path.join(userData, 'settings.json'), 'utf8')).includes(llm.url), 'the address to be saved')
+  assert.equal((await fs.readFile(path.join(userData, 'settings.json'), 'utf8')).includes('e2e-secret-key'), false)
+  assert.equal((await fs.readFile(path.join(userData, 'assistant-key.json'), 'utf8')).includes('e2e-secret-key'), false, 'the key is stored encrypted')
+  await shot(win, 'assistant-settings')
+  await win.click('.modal-footer >> text=Done')
+  await win.click('.drawer-header .icon-btn')
+  await win.waitForSelector('.assistant-btn')
+
+  // A pause after typing brings a suggestion, in grey after the cursor; Tab takes it.
+  const suggestion = () => document.querySelector('.cm-suggestion')?.textContent ?? null
+  const editorText = () => document.querySelector('.cm-content')?.textContent ?? ''
+  await win.click('.cm-content')
+  await win.keyboard.press(`${mod}+End`)
+  await win.keyboard.type('\nOur method is')
+  await win.waitForFunction(suggestion)
+  assert.equal(await win.evaluate(suggestion), ' faster than every method before it.')
+  // The cursor is shown in front of the word being typed, which the request names.
+  const asked = llm.chats().at(-1).body
+  assert.match(asked.messages.at(-1).content, /Our method <CURSOR>[\s\S]*the writer has typed "is" so far/)
+  await shot(win, 'suggestion')
+  await win.keyboard.press('Tab')
+  await win.waitForFunction(() => !document.querySelector('.cm-suggestion'))
+  assert.match(await win.evaluate(editorText), /Our method is faster than every method before it\./)
+  // Typing what it says keeps the rest; Escape lets it go.
+  await win.keyboard.type('\nThe results are summarised in')
+  await win.waitForFunction(suggestion)
+  await win.keyboard.type(' T')
+  await win.waitForFunction(() => document.querySelector('.cm-suggestion')?.textContent === 'able 1.')
+  await win.keyboard.press('Escape')
+  await win.waitForFunction(() => !document.querySelector('.cm-suggestion'))
+  assert.match(await win.evaluate(editorText), /The results are summarised in T(?!able)/)
+
+  // Only on request: no suggestion after a pause, one on Alt+\.
+  await win.click('.assistant-btn')
+  await win.click('.dropdown-item >> text=Suggest after a pause in typing')
+  await win.click('.cm-content')
+  await win.keyboard.press(`${mod}+End`)
+  const chatsBefore = llm.chats().length
+  await win.keyboard.type('\nOur method is')
+  await win.waitForTimeout(1500)
+  assert.equal(llm.chats().length, chatsBefore, 'no suggestion is asked for after a pause')
+  await win.keyboard.press('Alt+\\')
+  await win.waitForFunction(suggestion)
+  await win.keyboard.press('Tab')
+  await win.waitForFunction(() => !document.querySelector('.cm-suggestion'))
+  await win.click('.assistant-btn')
+  await win.click('.dropdown-item >> text=Suggest after a pause in typing')
+  await win.click('.cm-content')
+
+  // In Vim's insert mode, Tab takes a suggestion as well.
+  await win.click('.toolbar-btn >> text=Menu')
+  await win.selectOption('.menu-row:has-text("Keybindings") select', 'vim')
+  await win.click('.drawer-header .icon-btn')
+  await win.waitForSelector('.cm-fat-cursor')
+  await win.click('.cm-content')
+  await win.keyboard.press('Escape')
+  await win.keyboard.type('Go')
+  await win.keyboard.type('Our method is')
+  await win.waitForFunction(suggestion)
+  await win.keyboard.press('Tab')
+  await win.waitForFunction(() => !document.querySelector('.cm-suggestion'))
+  await win.keyboard.press('Escape')
+  await win.waitForSelector('.cm-fat-cursor')
+  assert.equal((await win.evaluate(editorText)).match(/Our method is faster than every method before it\./g)?.length, 3)
+  await win.click('.toolbar-btn >> text=Menu')
+  await win.selectOption('.menu-row:has-text("Keybindings") select', 'default')
+  await win.click('.drawer-header .icon-btn')
+  await win.waitForFunction(() => !document.querySelector('.cm-fat-cursor'))
+
+  // Proofreading: the corrections are shown in the passage, each can be kept
+  // or rejected, and applying them is one step that Undo takes back.
+  await win.click('.cm-content')
+  await win.keyboard.press(`${mod}+End`)
+  await win.keyboard.type('\n\nWe recieve teh data, wich is noisy.')
+  await win.keyboard.press('Escape') // a suggestion may have come up
+  await win.keyboard.press('Home')
+  await win.keyboard.press('Shift+End')
+  await win.keyboard.press(`${mod}+Shift+P`)
+  await win.waitForFunction(() => document.querySelectorAll('.proofread-passage .correction').length === 3)
+  assert.equal(llm.chats().at(-1).body.messages.at(-1).content, 'We recieve teh data, wich is noisy.')
+  await win.locator('.proofread-passage .correction').nth(1).click() // keep "teh"
+  await shot(win, 'proofread')
+  await win.click('.modal-footer >> text=Apply 2 of 3')
+  await win.waitForFunction(() => !document.querySelector('.proofread-passage'))
+  await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('We receive teh data, which is noisy.'))
+  await until(async () => (await onDisk('main.tex')).includes('We receive teh data, which is noisy.'), 'the corrected passage to be saved')
+  await win.keyboard.press(`${mod}+z`)
+  await win.waitForFunction(() => document.querySelector('.cm-content')?.textContent?.includes('We recieve teh data, wich is noisy.'))
+
+  // A failure is reported when the suggestion was asked for.
+  llm.state.fail = { status: 500, body: { error: { message: 'out of memory' } } }
+  await win.keyboard.press('End')
+  await win.keyboard.press('Alt+\\')
+  await win.waitForFunction(() =>
+    [...document.querySelectorAll('.toast.error')].some((t) => t.textContent?.includes('ran into a problem (500): out of memory'))
+  )
+  await win.waitForSelector('.assistant-btn.error')
+
+  // Turned off, it sends nothing at all.
+  await win.click('.toolbar-btn >> text=Menu')
+  await win.click('.menu-row:has-text("Writing assistant") button')
+  await win.click('.assistant-settings .settings-toggle')
+  await win.waitForFunction(() => !document.querySelector('.assistant-settings .settings-toggle input')?.checked)
+  await win.click('.modal-footer >> text=Done')
+  await win.click('.drawer-header .icon-btn')
+  await win.waitForFunction(() => !document.querySelector('.assistant-btn'))
+  const requestsBefore = llm.requests.length
+  await win.click('.cm-content')
+  await win.keyboard.press(`${mod}+End`)
+  await win.keyboard.type('\nOur method is')
+  await win.waitForTimeout(1500)
+  await win.keyboard.press(`${mod}+Shift+P`)
+  await win.waitForTimeout(300)
+  assert.equal(llm.requests.length, requestsBefore, 'nothing is sent while the assistant is off')
+  assert.equal(await win.locator('.proofread-passage').count(), 0)
+  // Back to where the steps below expect the cursor: on \maketitle.
+  await win.keyboard.press(`${mod}+Home`)
+  await win.click('.cm-line:has-text("\\\\maketitle")')
+  await waitForSaved(win)
+
   // ------------------------------------------------ per-project settings
   // The compiler and the main document are stored next to the project's files.
   const readMeta = async () =>
@@ -870,5 +1038,6 @@ try {
   throw err
 } finally {
   await app.close().catch(() => undefined)
+  await llm.close().catch(() => undefined)
   await fs.rm(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => undefined)
 }

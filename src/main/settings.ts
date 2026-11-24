@@ -34,6 +34,12 @@ export function defaultSettings(libraryPath: string): AppSettings {
       editsPerVersion: 10,
       editPauseSeconds: 5
     },
+    assistant: {
+      enabled: false,
+      url: '',
+      model: '',
+      inline: 'auto'
+    },
     pdfZoom: 'page-width',
     lastOpenFile: {},
     trustedRc: {},
@@ -47,7 +53,8 @@ const ENUMS: Record<string, ReadonlySet<string>> = {
   'editor.fontFamily': new Set(['monaco', 'lucida']),
   'editor.lineHeight': new Set(['compact', 'normal', 'wide']),
   'editor.keybindings': new Set(['default', 'vim', 'emacs']),
-  'layout.view': new Set(['split', 'editor', 'pdf'])
+  'layout.view': new Set(['split', 'editor', 'pdf']),
+  'assistant.inline': new Set(['auto', 'manual', 'off'])
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -113,6 +120,8 @@ function normalise(s: AppSettings): AppSettings {
   s.layout.editorRatio = clamp(s.layout.editorRatio, 0.15, 0.85)
   s.history.editsPerVersion = clamp(Math.round(s.history.editsPerVersion), 1, 1000)
   s.history.editPauseSeconds = clamp(Math.round(s.history.editPauseSeconds), 1, 600)
+  s.assistant.url = s.assistant.url.trim().slice(0, 2000)
+  s.assistant.model = s.assistant.model.trim().slice(0, 300)
   return s
 }
 

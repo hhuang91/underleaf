@@ -1,7 +1,7 @@
 {
   "name": "underleaf",
   "productName": "Underleaf",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A local, offline LaTeX editor with an Overleaf-style workflow.",
   "author": "Heyuan Huang",
   "license": "Apache-2.0",

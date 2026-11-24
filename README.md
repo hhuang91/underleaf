@@ -62,6 +62,11 @@ update, and the **History** screen then shows exactly what changed online.
   inside its folder. Save one under a name whenever you like; Underleaf also
   saves them by itself while you work. Compare any two states, and put a file
   or the whole project back. See [Version history](#version-history).
+- **Writing assistant** (optional, off by default) – suggestions from a
+  language model that you run yourself (Ollama, LM Studio, llama.cpp or any
+  other server with an OpenAI-compatible API): how the sentence goes on, in
+  grey after the cursor, and proofreading of a passage, with each correction
+  to accept or reject. See [Writing assistant](#writing-assistant).
 - **Plain folders** – no database. A project is a folder inside the library
   (by default `Documents/Underleaf`); folders you copy or `git clone` there
   show up automatically, and **New Project → Open Existing Folder** links a
@@ -135,6 +140,55 @@ is not built in; a file that a repository stores with Git LFS can be compared
 but not restored; and Underleaf keeps no versions in a linked work tree, in a
 project folder that is a submodule, or in a repository that uses SHA-256
 object names or the reftable format (the History screen says so).
+
+## Writing assistant
+
+Underleaf can ask a language model for help, from a server that you run
+yourself. It includes no model, and it talks to no service of its own: it
+sends requests only while the assistant is turned on, and only to the address
+you enter.
+
+**Setting it up.** Start a model server with a model, for instance:
+
+- [Ollama](https://ollama.com): `ollama pull qwen2.5:7b`. Its server runs at
+  `http://localhost:11434/v1`.
+- [LM Studio](https://lmstudio.ai): download a model, then start the server on
+  the **Developer** tab. It runs at `http://localhost:1234/v1`.
+- [llama.cpp](https://github.com/ggml-org/llama.cpp):
+  `llama-server -hf Qwen/Qwen2.5-7B-Instruct-GGUF`. It listens on port 9931
+  (8080 in versions before 1.0).
+
+Then turn it on in **Settings → Writing assistant**. Underleaf looks for a
+server on this computer and takes the first one that has a model; choose
+another model if you like, and use **Test the connection**. Any other server
+with an OpenAI-compatible API works too; enter its address, and its API key if
+it wants one.
+
+**Suggestions.** When you pause while typing, the model suggests how the
+sentence goes on, in grey after the cursor. **Tab** takes the suggestion,
+`Ctrl/⌘+→` takes its next word, typing the same text keeps the rest, and
+**Esc** or anything else lets it go. Instead of after a pause, suggestions can
+come only when you press `Alt+\` (`⌥\`), or not at all.
+
+**Proofreading.** Select a passage (or put the cursor in a paragraph) and press
+`Ctrl/⌘+Shift+P`, or right-click and choose **Proofread Selection**. The
+corrections appear in the passage; click one to keep the original text there,
+and apply the rest. Applying is one step, so **Undo** takes it back.
+
+**What is sent.** For a suggestion, the text around the cursor (about 2,000
+characters before it and 400 after) and the file's name; for proofreading,
+the passage. Nothing else of your projects. Settings shows a warning when the
+server is not on this computer. The API key is stored encrypted with the
+system's key store (the Keychain on macOS, your account on Windows), apart from
+the settings.
+
+**Choosing a model.** Instruction-tuned models of a few billion parameters
+(such as Qwen 2.5 or 3.5, Llama 3.1 or Gemma) are good at both. Smaller ones are
+faster but make more mistakes. Some models, Qwen 3 and 3.5 among them, think
+before they answer unless told not to; Underleaf tells llama.cpp, vLLM and
+Ollama to leave the thinking out. With other servers, turn thinking off in the
+server's settings (a model that thinks first is slow for suggestions). The
+first request after a while can take longer, while the server loads the model.
 
 ## TeX engines
 
@@ -250,6 +304,14 @@ UNDERLEAF_E2E_REAL_ENGINE=1 npm run test:e2e
 
 (PowerShell: `$env:UNDERLEAF_TEST_REAL_ENGINE = '1'; npm test`.)
 
+Likewise, a stand-in model server takes the place of a real one. To run the
+writing assistant's tests against real servers as well, name them as
+`name|address|model`, separated by `;`:
+
+```bash
+UNDERLEAF_TEST_LLM="Ollama|http://localhost:11434/v1|qwen2.5:0.5b" npx vitest run tests/unit/assistant.test.ts
+```
+
 ### Layout of the code
 
 ```
@@ -257,6 +319,7 @@ src/main/        Electron main process
   projects.ts      project library, zip import/export
   files.ts         file operations inside a project
   history.ts       versions of a project, kept in git
+  assistant.ts     the writing assistant's requests to the model server
   compile/         build mirror, engines, log parser, SyncTeX reader
 src/preload/     the bridge exposed to the UI as window.api
 src/renderer/    React UI (dashboard, editor, PDF viewer)
@@ -272,7 +335,7 @@ tests/           unit tests, the fake engine, the end-to-end smoke test
 | --- | --- | --- |
 | Projects | `Documents\Underleaf` (changeable in Settings) | `~/Documents/Underleaf` |
 | Versions of a project | `.git` inside the project's folder | the same |
-| Settings | `%APPDATA%\Underleaf` | `~/Library/Application Support/Underleaf` |
+| Settings (and the assistant's API key, encrypted) | `%APPDATA%\Underleaf` | `~/Library/Application Support/Underleaf` |
 | Build files (safe to delete) | `%LOCALAPPDATA%\Underleaf\build` | `~/Library/Caches/Underleaf/build` |
 | Built-in engine's package cache | `%LOCALAPPDATA%\TectonicProject\Tectonic` | `~/Library/Caches/Tectonic` |
 

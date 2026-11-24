@@ -1,17 +1,23 @@
 import type {
   AppInfo,
   AppSettings,
+  AssistantCheck,
   Compiler,
   CompileResult,
   DeepPartial,
+  DetectedServer,
   FileNode,
   HistoryList,
   ImportFilesResult,
   ImportResult,
+  InlineRequest,
+  InlineResult,
   PdfRect,
   ProjectIndex,
   ProjectState,
   ProjectSummary,
+  ProofreadRequest,
+  ProofreadResult,
   ReadFileResult,
   RestoreResult,
   SourceLocation,
@@ -42,6 +48,14 @@ export interface CompileProgressEvent {
 /** A version was added to the project's history. */
 export interface HistoryChangedEvent {
   id: string
+}
+
+/** The answer so far of a proofreading request. */
+export interface AssistantProgressEvent {
+  id: string
+  text: string
+  /** The model is still in its reasoning phase. */
+  thinking: boolean
 }
 
 /** The API exposed to the renderer as `window.api`. */
@@ -145,5 +159,27 @@ export interface UnderleafApi {
      */
     restore(id: string, version: string, path: string | null): Promise<RestoreResult>
     onChanged(cb: (event: HistoryChangedEvent) => void): () => void
+  }
+  /** The writing assistant (see src/main/assistant.ts). */
+  assistant: {
+    /** The text models of the configured server. */
+    models(): Promise<string[]>
+    /** Model servers that answer on this computer. */
+    detect(): Promise<DetectedServer[]>
+    /** Tries the configured server and model. */
+    check(): Promise<AssistantCheck>
+    /** Resolves with null when the request was replaced by a newer one or cancelled. */
+    complete(request: InlineRequest): Promise<InlineResult | null>
+    /** Resolves with null when the request was cancelled. Progress arrives through `onProgress`. */
+    proofread(request: ProofreadRequest): Promise<ProofreadResult | null>
+    cancel(id: string): Promise<void>
+    /**
+     * Stores an API key for the server that the settings name now (it is sent
+     * to no other); an empty key removes the stored one.
+     */
+    setKey(key: string): Promise<void>
+    /** Whether a key is stored, and for which server (scheme, host and port). */
+    keyStatus(): Promise<{ origin: string | null; forThisServer: boolean }>
+    onProgress(cb: (event: AssistantProgressEvent) => void): () => void
   }
 }

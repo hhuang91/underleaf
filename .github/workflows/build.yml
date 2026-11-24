@@ -154,6 +154,65 @@ jobs:
           path: tests/e2e/output
           if-no-files-found: ignore
 
+  # The writing assistant with real model servers: llama.cpp's server and
+  # Ollama, each with a small model. Both are downloaded at a fixed version and
+  # checked against their published checksums; the models come from Hugging
+  # Face and Ollama's registry. The answers of a model cannot be predicted, so
+  # the tests check that they arrive in the expected form, and print them.
+  model-servers:
+    name: Model servers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LLAMA_BUILD: b12359 # llama.cpp v1.0.0
+      LLAMA_SHA256: 0bc1f091e8916102b6d8f2cf944233a620e90a0f856c72d0ce41150c65c2e72e
+      OLLAMA_VERSION: v0.40.17
+      OLLAMA_SHA256: 1df9d6228bac5a22e420b242708c0d10e5b886db97bab99d446a41760f4e79af
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Start llama.cpp's server with a small model
+        run: |
+          curl -fsSL --retry 3 -o llama.tar.gz "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-ubuntu-x64.tar.gz"
+          echo "$LLAMA_SHA256  llama.tar.gz" | sha256sum -c -
+          mkdir llama && tar -xzf llama.tar.gz -C llama
+          server=$(find llama -name llama-server -type f | head -n 1)
+          LD_LIBRARY_PATH="$(dirname "$server")" nohup "$server" -hf Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M \
+            --alias qwen2.5-0.5b-instruct --host 127.0.0.1 --port 8080 -c 4096 > llama-server.log 2>&1 &
+          for i in $(seq 1 120); do
+            if curl -sf http://127.0.0.1:8080/health > /dev/null; then echo "Ready after about $((i * 5)) s"; exit 0; fi
+            sleep 5
+          done
+          cat llama-server.log
+          exit 1
+
+      - name: Start Ollama with a small model
+        run: |
+          command -v zstd > /dev/null || (sudo apt-get update && sudo apt-get install -y zstd)
+          curl -fsSL --retry 3 -o ollama.tar.zst "https://github.com/ollama/ollama/releases/download/$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+          echo "$OLLAMA_SHA256  ollama.tar.zst" | sha256sum -c -
+          mkdir ollama && tar --zstd -xf ollama.tar.zst -C ollama
+          ollama=$(find ollama -path '*/bin/ollama' -type f | head -n 1)
+          nohup "$ollama" serve > ollama.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:11434/api/version > /dev/null && break; sleep 2; done
+          "$ollama" pull qwen2.5:0.5b
+
+      - name: The writing assistant with the real servers
+        run: npx vitest run tests/unit/assistant.test.ts --silent=false --disable-console-intercept
+        env:
+          UNDERLEAF_TEST_LLM: llama.cpp|http://127.0.0.1:8080/v1|qwen2.5-0.5b-instruct;Ollama|http://127.0.0.1:11434/v1|qwen2.5:0.5b
+
+      - name: What the servers logged
+        if: failure()
+        run: tail -n 80 llama-server.log ollama.log
+
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')

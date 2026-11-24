@@ -6,8 +6,10 @@ import path from 'node:path'
 import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import type { UnderleafApi } from '@shared/api'
 import { CHANNELS, EVENTS, type ChannelNamespace, type IpcReply } from '@shared/channels'
-import type { AppSettings, Compiler, DeepPartial, VersionRef } from '@shared/types'
+import type { AppSettings, Compiler, DeepPartial, InlineRequest, ProofreadRequest, VersionRef } from '@shared/types'
 import type { ProjectAnalyzer } from './analysis'
+import type { ApiKeyStore } from './apiKey'
+import { MAX_AFTER, MAX_BEFORE, serverBase, type AssistantClient } from './assistant'
 import { isLatexmkRc, rcFingerprint, type CompileManager } from './compile'
 import type { HistoryManager } from './history'
 import {
@@ -40,6 +42,8 @@ export interface IpcContext {
   analyzer: ProjectAnalyzer
   watcher: ProjectWatcher
   history: HistoryManager
+  assistant: AssistantClient
+  apiKeys: ApiKeyStore
   window(): BrowserWindow | null
   /** Origins that are allowed to call the API (the app itself, plus the dev server). */
   trustedOrigins: string[]
@@ -49,7 +53,7 @@ export interface IpcContext {
 const COMPILERS: ReadonlySet<string> = new Set(['pdflatex', 'latex', 'xelatex', 'lualatex'])
 
 export function registerIpc(ctx: IpcContext): void {
-  const { settings, library, compiler, analyzer, watcher, history } = ctx
+  const { settings, library, compiler, analyzer, watcher, history, assistant, apiKeys } = ctx
   /** Folders the user picked in a native dialog during this session. */
   const chosenDirs = new Set<string>()
   /** Files this app wrote for the user (exports); they may be revealed in the file manager. */
@@ -468,6 +472,56 @@ export function registerIpc(ctx: IpcContext): void {
       const ref = versionRef(version, false)
       if (ref === 'current') throw new Error('Unknown version')
       return history.restore(library.dirFor(id), ref, rel)
+    }
+  })
+
+  // ------------------------------------------------------- assistant
+
+  const requestId = (value: unknown): string => {
+    if (typeof value !== 'string' || !/^[\w-]{1,100}$/.test(value)) throw new Error('Invalid request')
+    return value
+  }
+  const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+  register('assistant', {
+    models: async () => assistant.models(),
+    detect: async () => assistant.detect(),
+    check: async () => assistant.check(),
+    complete: async (request) => {
+      const r = (request ?? {}) as Partial<InlineRequest>
+      return assistant.complete({
+        id: requestId(r.id),
+        path: text(r.path).slice(0, 500),
+        before: text(r.before).slice(-MAX_BEFORE),
+        after: text(r.after).slice(0, MAX_AFTER),
+        trigger: r.trigger === 'manual' ? 'manual' : 'auto'
+      })
+    },
+    proofread: async (request) => {
+      const r = (request ?? {}) as Partial<ProofreadRequest>
+      const id = requestId(r.id)
+      return assistant.proofread({ id, path: text(r.path).slice(0, 500), text: text(r.text) }, (answer, thinking) =>
+        send(EVENTS.assistantProgress, { id, text: answer, thinking })
+      )
+    },
+    cancel: async (id) => {
+      if (typeof id === 'string') assistant.cancel(id)
+    },
+    setKey: async (key) => {
+      const value = text(key).slice(0, 4000)
+      // The key is for the server that the settings name now, and for no other.
+      const origin = value.trim() ? serverBase(settings.get().assistant.url).origin : ''
+      await apiKeys.set(value, origin)
+    },
+    keyStatus: async () => {
+      const origin = await apiKeys.origin()
+      let current: string | null = null
+      try {
+        current = serverBase(settings.get().assistant.url).origin
+      } catch {
+        current = null
+      }
+      return { origin, forThisServer: origin !== null && origin === current }
     }
   })
 }

@@ -3,8 +3,10 @@ import { redo, undo } from '@codemirror/commands'
 import { openSearchPanel } from '@codemirror/search'
 import type { EditorView } from '@codemirror/view'
 import {
+  mdiAlertCircleOutline,
   mdiBookOpenVariantOutline,
   mdiCodeBrackets,
+  mdiCreationOutline,
   mdiDotsHorizontal,
   mdiFileOutline,
   mdiFormatBold,
@@ -13,6 +15,7 @@ import {
   mdiFormatListNumbered,
   mdiImageOutline,
   mdiLinkVariant,
+  mdiLoading,
   mdiLockOutline,
   mdiMagnify,
   mdiRedo,
@@ -25,6 +28,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import { mimeOfImage } from '@shared/fileTypes'
 import { Icon } from '../components/Icon'
 import { Dropdown, type MenuEntry } from '../components/Menu'
+import { requestSuggestion } from '../editor/assistant'
 import { editor } from '../editor/controller'
 import {
   currentHeading,
@@ -35,8 +39,10 @@ import {
   wrapSelection,
   type HeadingLevel
 } from '../editor/extensions'
+import { emitMenuCommand } from '../lib/menuBus'
 import { baseName, cx, formatBytes, isMac, MOD } from '../lib/util'
-import { useSettings } from '../stores/app'
+import { useApp, useSettings } from '../stores/app'
+import { useAssistant } from '../stores/assistant'
 import { useIde, type OpenDoc } from '../stores/ide'
 import { loadPdf } from './pdfControl'
 
@@ -44,6 +50,7 @@ import { loadPdf } from './pdfControl'
 function CodeEditor({ hidden }: { hidden: boolean }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const settings = useSettings().editor
+  const assistant = useSettings().assistant
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -54,6 +61,10 @@ function CodeEditor({ hidden }: { hidden: boolean }): React.JSX.Element {
   useEffect(() => {
     editor.configure(settings)
   }, [settings])
+
+  useEffect(() => {
+    editor.configureAssistant(assistant)
+  }, [assistant])
 
   useEffect(() => {
     if (!hidden) editor.refreshLayout()
@@ -103,6 +114,61 @@ const TOOLS: Tool[] = [
 
 // Keep the selection in the editor while a toolbar button is clicked.
 const keepFocus = (e: React.MouseEvent): void => e.preventDefault()
+
+/** The writing assistant's button: what it is doing, and what it can do. */
+function AssistantButton(): React.JSX.Element | null {
+  const settings = useSettings().assistant
+  const patchSettings = useApp((s) => s.patchSettings)
+  const status = useAssistant((s) => s.status)
+  if (!settings.enabled) return null
+
+  const entries: MenuEntry[] = [
+    {
+      label: 'Suggest how the text goes on',
+      detail: isMac ? '⌥\\' : 'Alt+\\',
+      disabled: settings.inline === 'off',
+      onClick: () => {
+        // The menu took the keyboard; the suggestion needs it back in the editor.
+        editor.focus()
+        editor.run(requestSuggestion)
+      }
+    },
+    { label: 'Proofread selection or paragraph', detail: `${MOD}+Shift+P`, onClick: () => void useAssistant.getState().proofread() },
+    { type: 'divider' },
+    {
+      label: 'Suggest after a pause in typing',
+      checked: settings.inline === 'auto',
+      onClick: () => void patchSettings({ assistant: { inline: settings.inline === 'auto' ? 'manual' : 'auto' } })
+    },
+    { label: 'Writing assistant settings…', onClick: () => emitMenuCommand('settings') }
+  ]
+  const title =
+    status.state === 'thinking'
+      ? 'Writing assistant: the model is thinking…'
+      : status.state === 'error'
+        ? `Writing assistant: ${status.message}`
+        : 'Writing assistant'
+
+  return (
+    <Dropdown entries={entries} align="right">
+      {(toggle) => (
+        <button
+          type="button"
+          className={cx('icon-btn', 'assistant-btn', status.state === 'error' && 'error')}
+          title={title}
+          aria-label="Writing assistant"
+          onMouseDown={keepFocus}
+          onClick={toggle}
+        >
+          <Icon
+            path={status.state === 'thinking' ? mdiLoading : status.state === 'error' ? mdiAlertCircleOutline : mdiCreationOutline}
+            spin={status.state === 'thinking'}
+          />
+        </button>
+      )}
+    </Dropdown>
+  )
+}
 
 function EditorToolbar(): React.JSX.Element {
   const cursorLine = useIde((s) => s.cursorLine)
@@ -208,6 +274,7 @@ function EditorToolbar(): React.JSX.Element {
           )}
         </Dropdown>
       )}
+      <AssistantButton />
       <button
         type="button"
         className="icon-btn"

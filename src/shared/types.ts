@@ -62,6 +62,23 @@ export interface HistorySettings {
   editPauseSeconds: number
 }
 
+/** When the writing assistant suggests how the text goes on. */
+export type InlineSuggestions = 'auto' | 'manual' | 'off'
+
+export interface AssistantSettings {
+  /**
+   * Talk to the model server at all. Off until the user turns it on: nothing
+   * of a project is sent anywhere before that.
+   */
+  enabled: boolean
+  /** Address of an OpenAI-compatible API, such as http://localhost:11434/v1. */
+  url: string
+  /** The model, by the name the server gives it. */
+  model: string
+  /** 'auto': after a pause in typing; 'manual': only when asked for; 'off': never. */
+  inline: InlineSuggestions
+}
+
 export interface AppSettings {
   /** Folder that holds one sub-folder per project. */
   libraryPath: string
@@ -76,6 +93,7 @@ export interface AppSettings {
   editor: EditorSettings
   layout: LayoutSettings
   history: HistorySettings
+  assistant: AssistantSettings
   /** 'page-width', 'page-height' or a numeric scale such as '1.25'. */
   pdfZoom: string
   /** Project folder -> file that was open last time. */
@@ -248,6 +266,66 @@ export interface RestoreResult {
   left: Array<{ path: string; reason: 'unversioned' | 'lfs' | 'link' | 'name' }>
   /** Files that could not be written or removed (read-only, in use, ...). */
   failed: Array<{ path: string; message: string }>
+}
+
+// --------------------------------------------------------------- assistant
+
+/** A model server that answered on this computer. */
+export interface DetectedServer {
+  /** The program that usually listens there, such as "Ollama". */
+  name: string
+  /** The address to use, such as http://127.0.0.1:11434/v1. */
+  url: string
+  /** The models it offers (text models only). */
+  models: string[]
+}
+
+/** The outcome of trying the configured server and model. */
+export interface AssistantCheck {
+  models: string[]
+  model: string
+  /** How long the model took for a one-word answer. */
+  ms: number
+}
+
+/** Asks for the words that continue the text at the cursor. */
+export interface InlineRequest {
+  /** Chosen by the renderer; a newer request makes an older one pointless. */
+  id: string
+  /** The file, relative to the project (it tells the model what kind of text this is). */
+  path: string
+  /** The text just before the cursor (an excerpt). */
+  before: string
+  /** The text just after it (an excerpt). */
+  after: string
+  /** 'auto' requests are only served while suggestions after a pause are on. */
+  trigger: 'auto' | 'manual'
+}
+
+export interface InlineResult {
+  /** What to insert at the cursor; empty when the model had nothing to offer. */
+  text: string
+  /** A reasoning model spent its whole answer on thinking. */
+  thinking?: boolean
+}
+
+export interface ProofreadRequest {
+  id: string
+  path: string
+  /** The passage to correct. */
+  text: string
+}
+
+/** At most this much is proofread in one go: more would not fit what small models can take in. */
+export const MAX_PROOFREAD_CHARS = 6000
+
+export interface ProofreadResult {
+  /** The corrected passage. */
+  text: string
+  /** The answer stopped before its end (a limit of the server); its end is missing. */
+  truncated: boolean
+  /** A reasoning model spent its whole answer on thinking. */
+  thinking?: boolean
 }
 
 // ----------------------------------------------------------------- compile

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { mdiAlert, mdiCheckCircle, mdiRefresh } from '@mdi/js'
 import type { EngineBackend, TexStatus } from '@shared/types'
 import { useApp, useSettings } from '../stores/app'
+import { AssistantSettings } from './AssistantSettings'
 import { Icon } from './Icon'
 import { Modal } from './Modal'
 
@@ -201,6 +202,8 @@ export function SettingsModal({ onClose, insideProject }: SettingsModalProps): R
           also saved when a project is opened or closed with changes, and before anything replaces its files.
         </div>
       </section>
+
+      <AssistantSettings />
     </Modal>
   )
 }

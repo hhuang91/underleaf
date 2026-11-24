@@ -5,6 +5,7 @@ import {
   mdiContentCopy,
   mdiContentSaveOutline,
   mdiCounter,
+  mdiCreationOutline,
   mdiFilePdfBox,
   mdiFolderOpenOutline,
   mdiFolderZipOutline,
@@ -31,6 +32,7 @@ import { editor } from '../editor/controller'
 import { EDITOR_THEMES } from '../editor/themes'
 import { errorMessage, isMac, MOD } from '../lib/util'
 import { notifyError, useApp, useSettings } from '../stores/app'
+import { useAssistant } from '../stores/assistant'
 import { useIde } from '../stores/ide'
 
 function texFiles(nodes: FileNode[], out: string[] = []): string[] {
@@ -144,6 +146,16 @@ const HOTKEYS: Array<{ group: string; keys: Array<[string, string]> }> = [
     keys: [
       [`${MOD} + Shift + S`, 'Save a version under a name'],
       [`${MOD} + Shift + H`, 'Show or leave the history']
+    ]
+  },
+  {
+    group: 'Writing assistant',
+    keys: [
+      ['Tab', 'Take the suggestion'],
+      [`${MOD} + →`, 'Take its next word'],
+      ['Esc', 'Let it go'],
+      [isMac ? '⌥ \\' : 'Alt + \\', 'Suggest how the text goes on'],
+      [`${MOD} + Shift + P`, 'Proofread the selection or paragraph']
     ]
   }
 ]
@@ -278,6 +290,19 @@ export function MenuDrawer(props: MenuDrawerProps): React.JSX.Element {
             <Icon path={mdiCounter} />
             Word Count
           </button>
+          {settings.assistant.enabled && (
+            <button
+              type="button"
+              className="drawer-link"
+              onClick={() => {
+                props.onClose()
+                void useAssistant.getState().proofread()
+              }}
+            >
+              <Icon path={mdiCreationOutline} />
+              Proofread Selection
+            </button>
+          )}
           <button
             type="button"
             className="drawer-link"
@@ -311,6 +336,14 @@ export function MenuDrawer(props: MenuDrawerProps): React.JSX.Element {
             <button type="button" className="btn btn-secondary btn-sm drawer-engine" onClick={props.onShowEngineSettings}>
               <Icon path={mdiCog} size={16} />
               <span className="truncate">{engine.text}</span>
+            </button>
+          </Row>
+          <Row label="Writing assistant">
+            <button type="button" className="btn btn-secondary btn-sm drawer-engine" onClick={props.onShowEngineSettings}>
+              <Icon path={mdiCog} size={16} />
+              <span className="truncate">
+                {settings.assistant.enabled ? settings.assistant.model || 'On, no model chosen' : 'Off'}
+              </span>
             </button>
           </Row>
           <Row label="Main document">

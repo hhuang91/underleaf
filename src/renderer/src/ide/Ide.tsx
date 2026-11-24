@@ -21,6 +21,7 @@ import { editor } from '../editor/controller'
 import { deferMenuCommand, useMenuCommands } from '../lib/menuBus'
 import { cx, errorMessage, isMac } from '../lib/util'
 import { notifyError, useApp, useSettings } from '../stores/app'
+import { useAssistant } from '../stores/assistant'
 import { useHistory } from '../stores/history'
 import { useIde } from '../stores/ide'
 import { EditorPane } from './EditorPane'
@@ -29,6 +30,7 @@ import { HistoryView, SaveVersionModal } from './HistoryView'
 import { HotkeysModal, MenuDrawer, WordCountModal } from './MenuDrawer'
 import { Outline } from './Outline'
 import { PdfPane } from './PdfPane'
+import { ProofreadModal } from './ProofreadModal'
 
 type IdeModal = 'hotkeys' | 'word-count' | 'settings' | 'unsaved' | 'save-version' | null
 
@@ -130,6 +132,7 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
   useEffect(
     () => () => {
       useHistory.getState().reset()
+      useAssistant.getState().closeProofreading()
       void useIde.getState().unload()
     },
     []
@@ -241,6 +244,10 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
         break
       case 'save-version':
         setModal('save-version')
+        break
+      case 'proofread':
+        // From the right-click menu, which also opens on text fields elsewhere.
+        if (editor.hasFocus) void useAssistant.getState().proofread()
         break
       case 'new-project':
       case 'upload-project':
@@ -399,6 +406,7 @@ export function Ide({ projectId }: { projectId: string }): React.JSX.Element {
         />
       )}
       {modal === 'save-version' && <SaveVersionModal onClose={() => setModal(null)} />}
+      <ProofreadModal />
       {modal === 'hotkeys' && <HotkeysModal onClose={() => setModal(null)} />}
       {modal === 'word-count' && <WordCountModal onClose={() => setModal(null)} />}
       {modal === 'settings' && <SettingsModal insideProject onClose={() => setModal(null)} />}
